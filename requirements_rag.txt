@@ -1,0 +1,13 @@
+flask
+flask-cors
+langchain
+langchain-openai
+langchain-community
+langchain-text-splitters
+openai
+chromadb
+python-dotenv
+pypdf
+beautifulsoup4
+requests
+gunicorn
