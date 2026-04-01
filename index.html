@@ -1,0 +1,956 @@
+<!DOCTYPE html>
+<html lang="fr" dir="ltr" id="html-root">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tuteur Maths Primaire 🧮</title>
+    <link href="https://fonts.googleapis.com/css2?family=Fredoka+One&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Nunito', sans-serif;
+            background: linear-gradient(135deg, #e0f7fa 0%, #b2ebf2 50%, #e8f5e9 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        /* ===== HEADER ===== */
+        .header {
+            background: linear-gradient(135deg, #FF6B6B, #FFE66D, #4ECDC4, #45B7D1);
+            background-size: 300% 300%;
+            animation: gradientShift 4s ease infinite;
+            border-radius: 25px;
+            padding: 25px 20px;
+            text-align: center;
+            margin-bottom: 15px;
+            box-shadow: 0 15px 40px rgba(0,0,0,0.15);
+            border: 4px solid white;
+        }
+
+        @keyframes gradientShift {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+
+        .header-icon {
+            font-size: 60px;
+            animation: bounce 1.5s infinite;
+            display: block;
+        }
+
+        @keyframes bounce {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-12px); }
+        }
+
+        .header-title {
+            font-family: 'Fredoka One', cursive;
+            color: white;
+            font-size: 2.2em;
+            text-shadow: 3px 3px 0px rgba(0,0,0,0.15);
+            margin: 8px 0 4px 0;
+        }
+
+        .header-subtitle {
+            color: rgba(255,255,255,0.95);
+            font-size: 0.95em;
+            font-weight: 700;
+        }
+
+        /* ===== SÉLECTEUR LANGUE ===== */
+        .lang-selector {
+            background: white;
+            border-radius: 20px;
+            padding: 15px 20px;
+            margin-bottom: 15px;
+            box-shadow: 0 8px 25px rgba(0,0,0,0.1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 15px;
+        }
+
+        .lang-btn {
+            padding: 8px 20px;
+            border: 3px solid #4ECDC4;
+            border-radius: 15px;
+            font-family: 'Fredoka One', cursive;
+            font-size: 1em;
+            cursor: pointer;
+            background: white;
+            color: #764ba2;
+            transition: all 0.3s ease;
+        }
+
+        .lang-btn.active {
+            background: linear-gradient(135deg, #764ba2, #4ECDC4);
+            color: white;
+            border-color: transparent;
+            box-shadow: 0 5px 15px rgba(118,75,162,0.3);
+        }
+
+        .lang-btn:hover:not(.active) {
+            background: #f0f0ff;
+            transform: translateY(-2px);
+        }
+
+        /* ===== SÉLECTEURS NIVEAU ET CHAPITRE ===== */
+        .selectors {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-bottom: 15px;
+        }
+
+        .selector-box {
+            background: white;
+            border-radius: 20px;
+            padding: 15px;
+            box-shadow: 0 8px 25px rgba(0,0,0,0.1);
+        }
+
+        .selector-label {
+            font-family: 'Fredoka One', cursive;
+            color: #764ba2;
+            font-size: 1em;
+            margin-bottom: 8px;
+            display: block;
+        }
+
+        select {
+            width: 100%;
+            padding: 10px 15px;
+            border: 3px solid #4ECDC4;
+            border-radius: 12px;
+            font-family: 'Nunito', sans-serif;
+            font-size: 0.95em;
+            font-weight: 600;
+            color: #333;
+            background: white;
+            cursor: pointer;
+            outline: none;
+            transition: border-color 0.3s;
+        }
+
+        select:focus { border-color: #764ba2; }
+
+        /* ===== BADGE ACTUEL ===== */
+        .current-badge {
+            background: linear-gradient(135deg, #FFE66D, #FF6B6B);
+            border-radius: 15px;
+            padding: 10px 20px;
+            text-align: center;
+            font-family: 'Fredoka One', cursive;
+            font-size: 1em;
+            color: white;
+            text-shadow: 1px 1px 0 rgba(0,0,0,0.2);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            margin-bottom: 15px;
+        }
+
+        /* ===== ÉTAPE BADGE ===== */
+        .etape-badge {
+            background: linear-gradient(135deg, #4ECDC4, #45B7D1);
+            border-radius: 12px;
+            padding: 8px 15px;
+            text-align: center;
+            font-family: 'Fredoka One', cursive;
+            font-size: 0.9em;
+            color: white;
+            margin-bottom: 10px;
+            display: none;
+        }
+
+        /* ===== SCORE ===== */
+        .score-bar {
+            text-align: center;
+            font-family: 'Fredoka One', cursive;
+            font-size: 0.95em;
+            color: #764ba2;
+            margin-bottom: 10px;
+            display: none;
+        }
+
+        /* ===== CHAT CONTAINER ===== */
+        .chat-container {
+            background: white;
+            border-radius: 25px;
+            padding: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            margin-bottom: 15px;
+            min-height: 400px;
+            max-height: 450px;
+            overflow-y: auto;
+        }
+
+        .chat-container::-webkit-scrollbar { width: 6px; }
+        .chat-container::-webkit-scrollbar-track { background: #f0f0f0; border-radius: 10px; }
+        .chat-container::-webkit-scrollbar-thumb { background: #4ECDC4; border-radius: 10px; }
+
+        /* ===== MESSAGES ===== */
+        .message { margin-bottom: 15px; animation: fadeIn 0.4s ease; }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .message-user { display: flex; justify-content: flex-end; }
+        .message-assistant { display: flex; justify-content: flex-start; }
+
+        .bubble {
+            max-width: 75%;
+            padding: 12px 18px;
+            border-radius: 20px;
+            font-size: 0.95em;
+            line-height: 1.6;
+            white-space: pre-wrap;
+        }
+
+        .bubble-user {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            border-radius: 20px 20px 5px 20px;
+            box-shadow: 0 5px 15px rgba(102,126,234,0.3);
+        }
+
+        .bubble-assistant {
+            background: #f8f9ff;
+            color: #333;
+            border-radius: 20px 20px 20px 5px;
+            border: 2px solid #e8eaff;
+            box-shadow: 0 3px 10px rgba(0,0,0,0.05);
+        }
+
+        .bubble.rtl { direction: rtl; text-align: right; font-size: 1em; }
+
+        /* ===== AVATARS ===== */
+        .avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.4em;
+            flex-shrink: 0;
+        }
+
+        .avatar-user { background: linear-gradient(135deg, #667eea, #764ba2); margin-left: 8px; }
+        .avatar-assistant { background: linear-gradient(135deg, #4ECDC4, #45B7D1); margin-right: 8px; }
+        .avatar.rtl { margin-right: 0; margin-left: 8px; }
+
+        /* ===== TYPING INDICATOR ===== */
+        .typing {
+            display: none;
+            padding: 12px 18px;
+            background: #f8f9ff;
+            border-radius: 20px 20px 20px 5px;
+            border: 2px solid #e8eaff;
+            width: fit-content;
+            margin-bottom: 10px;
+        }
+
+        .typing span {
+            width: 8px; height: 8px;
+            background: #4ECDC4;
+            border-radius: 50%;
+            display: inline-block;
+            margin: 0 2px;
+            animation: typingBounce 1.2s infinite;
+        }
+
+        .typing span:nth-child(2) { animation-delay: 0.2s; }
+        .typing span:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes typingBounce {
+            0%, 60%, 100% { transform: translateY(0); }
+            30% { transform: translateY(-8px); }
+        }
+
+        /* ===== INPUT ZONE ===== */
+        .input-zone {
+            background: white;
+            border-radius: 20px;
+            padding: 15px;
+            box-shadow: 0 8px 25px rgba(0,0,0,0.1);
+            margin-bottom: 15px;
+        }
+
+        .input-row {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .chat-input {
+            flex: 1;
+            padding: 12px 18px;
+            border: 3px solid #4ECDC4;
+            border-radius: 15px;
+            font-family: 'Nunito', sans-serif;
+            font-size: 1em;
+            font-weight: 600;
+            outline: none;
+            transition: border-color 0.3s;
+        }
+
+        .chat-input:focus { border-color: #764ba2; }
+
+        .send-btn {
+            padding: 12px 25px;
+            background: linear-gradient(135deg, #4ECDC4, #45B7D1);
+            color: white;
+            border: none;
+            border-radius: 15px;
+            font-family: 'Fredoka One', cursive;
+            font-size: 1em;
+            cursor: pointer;
+            transition: all 0.3s;
+            box-shadow: 0 5px 15px rgba(78,205,196,0.4);
+        }
+
+        .send-btn:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(78,205,196,0.5); }
+
+        /* ===== ACTION BUTTONS ===== */
+        .action-buttons {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin-bottom: 15px;
+        }
+
+        .action-btn {
+            padding: 10px 20px;
+            background: white;
+            border: 2px solid #4ECDC4;
+            border-radius: 12px;
+            font-family: 'Fredoka One', cursive;
+            font-size: 0.9em;
+            color: #764ba2;
+            cursor: pointer;
+            transition: all 0.3s;
+            box-shadow: 0 3px 10px rgba(0,0,0,0.08);
+        }
+
+        .action-btn:hover {
+            background: linear-gradient(135deg, #764ba2, #4ECDC4);
+            color: white;
+            transform: translateY(-2px);
+        }
+
+        /* ===== FOOTER ===== */
+        .footer {
+            text-align: center;
+            color: #888;
+            font-size: 0.85em;
+            padding: 10px;
+        }
+
+        /* ===== RESPONSIVE ===== */
+        @media (max-width: 600px) {
+            .selectors { grid-template-columns: 1fr; }
+            .action-buttons { flex-wrap: wrap; }
+            .lang-selector { flex-wrap: wrap; }
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+
+    <!-- HEADER -->
+    <div class="header">
+        <span class="header-icon">🧮</span>
+        <div class="header-title" id="header-title">Tuteur Maths Primaire</div>
+        <div class="header-subtitle" id="header-subtitle">Cycle Primaire — 1ère à 6ème année</div>
+    </div>
+
+    <!-- SÉLECTEUR DE LANGUE -->
+    <div class="lang-selector">
+        <button class="lang-btn active" id="btn-fr" onclick="setLangue('Français')">
+            🇫🇷 Français
+        </button>
+        <button class="lang-btn" id="btn-ar" onclick="setLangue('العربية')">
+            🇲🇦 العربية
+        </button>
+    </div>
+
+    <!-- SÉLECTEURS NIVEAU ET CHAPITRE -->
+    <div class="selectors">
+        <div class="selector-box">
+            <span class="selector-label" id="label-niveau">📚 Choisis ton niveau</span>
+            <select id="niveau-select" onchange="onNiveauChange()">
+                <option value="1ère année">🌱 1ère année</option>
+                <option value="2ème année">🌿 2ème année</option>
+                <option value="3ème année" selected>🌳 3ème année</option>
+                <option value="4ème année">⭐ 4ème année</option>
+                <option value="5ème année">🌟 5ème année</option>
+                <option value="6ème année">🏆 6ème année</option>
+            </select>
+        </div>
+        <div class="selector-box">
+            <span class="selector-label" id="label-chapitre">🧮 Choisis un chapitre</span>
+            <select id="chapitre-select" onchange="onSelectionChange()">
+                <!-- Chapitres mis à jour dynamiquement selon le niveau -->
+                <option value="Addition">➕ Addition</option>
+                <option value="Soustraction">➖ Soustraction</option>
+                <option value="Multiplication">✖️ Multiplication</option>
+            </select>
+        </div>
+    </div>
+
+    <!-- BADGE ACTUEL -->
+    <div class="current-badge" id="current-badge">
+        🌳 3ème année &nbsp;|&nbsp; ➕ Addition
+    </div>
+
+    <!-- ÉTAPE ACTUELLE -->
+    <div class="etape-badge" id="etape-badge">❓ Question d'amorce</div>
+
+    <!-- SCORE -->
+    <div class="score-bar" id="score-bar">⭐ Score : 0/0</div>
+
+    <!-- CHAT CONTAINER -->
+    <div class="chat-container" id="chat-messages">
+        <div class="typing" id="typing-indicator">
+            <span></span><span></span><span></span>
+        </div>
+    </div>
+
+    <!-- INPUT ZONE -->
+    <div class="input-zone">
+        <div class="input-row">
+            <input
+                type="text"
+                id="user-input"
+                class="chat-input"
+                placeholder="Écris ta réponse ici... 🖊️"
+                onkeypress="handleKeyPress(event)"
+            >
+            <button class="send-btn" id="send-btn" onclick="sendMessage()">
+                Envoyer 📨
+            </button>
+        </div>
+    </div>
+
+    <!-- BOUTONS ACTION -->
+    <div class="action-buttons">
+        <button class="action-btn" id="btn-new" onclick="resetConversation()">
+            🔄 Nouvelle leçon
+        </button>
+        <button class="action-btn" id="btn-help" onclick="showHelp()">
+            💡 Aide
+        </button>
+        <button class="action-btn" id="btn-progress" onclick="showProgress()">
+            ⭐ Progression
+        </button>
+    </div>
+
+    <!-- FOOTER -->
+    <div class="footer" id="footer-text">
+        🧮 Tuteur Maths Primaire | PFE FSE Rabat 🌟
+    </div>
+
+</div>
+
+<script>
+    // ============================================================
+    // VARIABLES GLOBALES
+    // ============================================================
+    const API_URL      = 'http://localhost:5000';
+    let sessionId      = generateSessionId();
+    let langueActuelle = 'Français';
+    let score          = { bonnes: 0, total: 0 };
+
+    // ============================================================
+    // CHAPITRES DISPONIBLES PAR NIVEAU
+    // ============================================================
+    const CHAPITRES_PAR_NIVEAU = {
+        '1ère année': ['Addition', 'Soustraction'],
+        '2ème année': ['Addition', 'Soustraction', 'Multiplication'],
+        '3ème année': ['Addition', 'Soustraction', 'Multiplication'],
+        '4ème année': ['Addition', 'Soustraction', 'Multiplication', 'Fractions'],
+        '5ème année': ['Addition', 'Soustraction', 'Multiplication', 'Fractions'],
+        '6ème année': ['Addition', 'Soustraction', 'Multiplication', 'Fractions'],
+    };
+
+    // ============================================================
+    // NOMS DES CHAPITRES SELON LA LANGUE
+    // ============================================================
+    const CHAPITRES_NOMS = {
+        'Français': {
+            'Addition':       '➕ Addition',
+            'Soustraction':   '➖ Soustraction',
+            'Multiplication': '✖️ Multiplication',
+            'Fractions':      '🔢 Fractions'
+        },
+        'العربية': {
+            'Addition':       '➕ الجمع',
+            'Soustraction':   '➖ الطرح',
+            'Multiplication': '✖️ الضرب',
+            'Fractions':      '🔢 الكسور'
+        }
+    };
+
+    // ============================================================
+    // TRADUCTIONS FR/AR
+    // ============================================================
+    const TRADUCTIONS = {
+        'Français': {
+            headerTitle:    'Tuteur Maths Primaire',
+            headerSubtitle: 'Cycle Primaire — 1ère à 6ème année',
+            labelNiveau:    '📚 Choisis ton niveau',
+            labelChapitre:  '🧮 Choisis un chapitre',
+            placeholder:    'Écris ta réponse ici... 🖊️',
+            sendBtn:        'Envoyer 📨',
+            btnNew:         '🔄 Nouvelle leçon',
+            btnHelp:        '💡 Aide',
+            btnProgress:    '⭐ Progression',
+            footer:         '🧮 Tuteur Maths Primaire | PFE FSE Rabat 🌟',
+            bienvenue: (niveau, chapitre) =>
+                `👋 Bonjour ! 🌟\n\nJe suis ton tuteur de mathématiques pour la **${niveau}** !\n\n❓ Qu'est-ce que tu voudrais savoir sur la **${chapitre}** aujourd'hui ?`,
+            aide: '💡 **Aide** :\n\n• Réponds aux questions du tuteur\n• Ne t\'inquiète pas si tu te trompes ! 😊\n• Écris ta réponse puis appuie sur Envoyer',
+            score: (b, t) => `⭐ Score : ${b}/${t} bonnes réponses`,
+            niveaux: {
+                '1ère année': '🌱 1ère année',
+                '2ème année': '🌿 2ème année',
+                '3ème année': '🌳 3ème année',
+                '4ème année': '⭐ 4ème année',
+                '5ème année': '🌟 5ème année',
+                '6ème année': '🏆 6ème année',
+            }
+        },
+        'العربية': {
+            headerTitle:    'مُعلِّم الرياضيات الذكي',
+            headerSubtitle: 'السلك الابتدائي — من السنة الأولى إلى السادسة',
+            labelNiveau:    '📚 اختر مستواك',
+            labelChapitre:  '🧮 اختر الدرس',
+            placeholder:    'اكتب جوابك هنا... 🖊️',
+            sendBtn:        'إرسال 📨',
+            btnNew:         '🔄 درس جديد',
+            btnHelp:        '💡 مساعدة',
+            btnProgress:    '⭐ تقدمي',
+            footer:         '🧮 مُعلِّم الرياضيات للتعليم الابتدائي 🌟',
+            bienvenue: (niveauKey, chapitreKey) => {
+                const niveauxAr = {
+                    '1ère année': 'السنة الأولى', '2ème année': 'السنة الثانية',
+                    '3ème année': 'السنة الثالثة', '4ème année': 'السنة الرابعة',
+                    '5ème année': 'السنة الخامسة', '6ème année': 'السنة السادسة'
+                };
+                const chapitresAr = {
+                    'Addition': 'الجمع', 'Soustraction': 'الطرح',
+                    'Multiplication': 'الضرب', 'Fractions': 'الكسور'
+                };
+                const nAr = niveauxAr[niveauKey] || niveauKey;
+                const cAr = chapitresAr[chapitreKey] || chapitreKey;
+                return `👋 مرحباً بك ! 🌟\n\nأنا معلم الرياضيات الخاص بك لـ **${nAr}** !\n\n❓ ماذا تريد أن تتعلم في **${cAr}** اليوم ؟`;
+            },
+            aide: '💡 **مساعدة** :\n\n• أجب على أسئلة المعلم\n• لا تقلق إذا أخطأت ! 😊\n• اكتب جوابك ثم اضغط إرسال',
+            score: (b, t) => `⭐ النتيجة : ${b}/${t} إجابات صحيحة`,
+            niveaux: {
+                '1ère année': '🌱 السنة الأولى',
+                '2ème année': '🌿 السنة الثانية',
+                '3ème année': '🌳 السنة الثالثة',
+                '4ème année': '⭐ السنة الرابعة',
+                '5ème année': '🌟 السنة الخامسة',
+                '6ème année': '🏆 السنة السادسة',
+            }
+        }
+    };
+
+    // ============================================================
+    // MISE À JOUR DES CHAPITRES SELON LE NIVEAU — NOUVEAU !
+    // ============================================================
+    function updateChapitres(niveau, chapitreActuel = null) {
+        const chapitreSelect   = document.getElementById('chapitre-select');
+        const chapitresDispo   = CHAPITRES_PAR_NIVEAU[niveau] || ['Addition', 'Soustraction'];
+        const chapNoms         = CHAPITRES_NOMS[langueActuelle];
+
+        // Reconstruire les options disponibles
+        chapitreSelect.innerHTML = chapitresDispo.map(chap => {
+            const label    = chapNoms[chap] || chap;
+            const selected = (chapitreActuel && chap === chapitreActuel) ? 'selected' : '';
+            return `<option value="${chap}" ${selected}>${label}</option>`;
+        }).join('');
+
+        // Si le chapitre précédent n'est plus disponible → sélectionner le premier
+        if (chapitreActuel && !chapitresDispo.includes(chapitreActuel)) {
+            chapitreSelect.value = chapitresDispo[0];
+        }
+    }
+
+    // ============================================================
+    // CHANGEMENT DE NIVEAU → Met à jour les chapitres + nouvelle leçon
+    // ============================================================
+    function onNiveauChange() {
+        const niveau        = document.getElementById('niveau-select').value;
+        const chapActuel    = document.getElementById('chapitre-select').value;
+
+        // Mettre à jour les chapitres disponibles pour ce niveau
+        updateChapitres(niveau, chapActuel);
+
+        // Déclencher une nouvelle leçon
+        onSelectionChange();
+    }
+
+    // ============================================================
+    // CHANGEMENT DE CHAPITRE → Nouvelle leçon
+    // ============================================================
+    function onSelectionChange() {
+        updateBadge();
+
+        score = { bonnes: 0, total: 0 };
+        document.getElementById('score-bar').style.display   = 'none';
+        document.getElementById('etape-badge').style.display = 'none';
+
+        sessionId = generateSessionId();
+        const container = document.getElementById('chat-messages');
+        const typing    = document.getElementById('typing-indicator');
+        container.innerHTML = '';
+        container.appendChild(typing);
+
+        const niveauKey   = document.getElementById('niveau-select').value;
+        const chapitreKey = document.getElementById('chapitre-select').value;
+        const isAr        = langueActuelle === 'العربية';
+
+        const niveauxAr = {
+            '1ère année': 'السنة الأولى', '2ème année': 'السنة الثانية',
+            '3ème année': 'السنة الثالثة', '4ème année': 'السنة الرابعة',
+            '5ème année': 'السنة الخامسة', '6ème année': 'السنة السادسة'
+        };
+        const chapitresAr = {
+            'Addition': 'الجمع', 'Soustraction': 'الطرح',
+            'Multiplication': 'الضرب', 'Fractions': 'الكسور'
+        };
+
+        const niveauAffiche   = isAr ? (niveauxAr[niveauKey]    || niveauKey)   : niveauKey;
+        const chapitreAffiche = isAr ? (chapitresAr[chapitreKey] || chapitreKey) : chapitreKey;
+
+        const msgBienvenue = isAr
+            ? `👋 مرحباً بك ! 🌟\n\nأنا معلم الرياضيات الخاص بك لـ **${niveauAffiche}** !\n\n❓ ماذا تريد أن تتعلم في **${chapitreAffiche}** اليوم ؟`
+            : `👋 Bonjour ! 🌟\n\nJe suis ton tuteur de mathématiques pour la **${niveauAffiche}** !\n\n❓ Qu'est-ce que tu voudrais savoir sur la **${chapitreAffiche}** aujourd'hui ?`;
+
+        addMessage(msgBienvenue, 'assistant');
+    }
+
+    // ============================================================
+    // CHANGER LA LANGUE
+    // ============================================================
+    function setLangue(langue) {
+        langueActuelle = langue;
+        const t    = TRADUCTIONS[langue];
+        const isAr = langue === 'العربية';
+
+        document.getElementById('html-root').setAttribute('dir',  isAr ? 'rtl' : 'ltr');
+        document.getElementById('html-root').setAttribute('lang', isAr ? 'ar'  : 'fr');
+
+        document.getElementById('header-title').textContent    = t.headerTitle;
+        document.getElementById('header-subtitle').textContent = t.headerSubtitle;
+        document.getElementById('label-niveau').textContent    = t.labelNiveau;
+        document.getElementById('label-chapitre').textContent  = t.labelChapitre;
+        document.getElementById('user-input').placeholder      = t.placeholder;
+        document.getElementById('send-btn').textContent        = t.sendBtn;
+        document.getElementById('btn-new').textContent         = t.btnNew;
+        document.getElementById('btn-help').textContent        = t.btnHelp;
+        document.getElementById('btn-progress').textContent    = t.btnProgress;
+        document.getElementById('footer-text').textContent     = t.footer;
+
+        document.getElementById('btn-fr').classList.toggle('active', langue === 'Français');
+        document.getElementById('btn-ar').classList.toggle('active', langue === 'العربية');
+
+        // Mettre à jour le sélecteur de NIVEAUX
+        const niveauSelect = document.getElementById('niveau-select');
+        const niveauActuel = niveauSelect.value;
+        niveauSelect.innerHTML = Object.entries(t.niveaux).map(([val, label]) =>
+            `<option value="${val}" ${val === niveauActuel ? 'selected' : ''}>${label}</option>`
+        ).join('');
+
+        // Mettre à jour les chapitres selon le niveau ET la langue
+        const chapActuel = document.getElementById('chapitre-select').value;
+        updateChapitres(niveauActuel, chapActuel);
+
+        updateBadge();
+
+        // R5 : Message de bienvenue dans la nouvelle langue
+        const container = document.getElementById('chat-messages');
+        const typing    = document.getElementById('typing-indicator');
+        container.innerHTML = '';
+        container.appendChild(typing);
+
+        const niveauKey2   = document.getElementById('niveau-select').value;
+        const chapitreKey2 = document.getElementById('chapitre-select').value;
+        const niveauxAr2   = {
+            '1ère année': 'السنة الأولى', '2ème année': 'السنة الثانية',
+            '3ème année': 'السنة الثالثة', '4ème année': 'السنة الرابعة',
+            '5ème année': 'السنة الخامسة', '6ème année': 'السنة السادسة'
+        };
+        const chapitresAr2 = {
+            'Addition': 'الجمع', 'Soustraction': 'الطرح',
+            'Multiplication': 'الضرب', 'Fractions': 'الكسور'
+        };
+        const nAffiche = isAr ? (niveauxAr2[niveauKey2]    || niveauKey2)   : niveauKey2;
+        const cAffiche = isAr ? (chapitresAr2[chapitreKey2] || chapitreKey2) : chapitreKey2;
+
+        const msgBienvenueLang = isAr
+            ? `👋 مرحباً بك ! 🌟\n\nأنا معلم الرياضيات الخاص بك لـ **${nAffiche}** !\n\n❓ ماذا تريد أن تتعلم في **${cAffiche}** اليوم ؟`
+            : `👋 Bonjour ! 🌟\n\nJe suis ton tuteur de mathématiques pour la **${nAffiche}** !\n\n❓ Qu'est-ce que tu voudrais savoir sur la **${cAffiche}** aujourd'hui ?`;
+        addMessage(msgBienvenueLang, 'assistant');
+    }
+
+    // ============================================================
+    // BADGE NIVEAU/CHAPITRE
+    // ============================================================
+    function updateBadge() {
+        const niveau   = document.getElementById('niveau-select').value;
+        const chapitre = document.getElementById('chapitre-select').value;
+        const t        = TRADUCTIONS[langueActuelle];
+        const niveauLabel = t.niveaux[niveau] || niveau;
+
+        const chapitreEmojis = {
+            'Addition': '➕', 'Soustraction': '➖',
+            'Multiplication': '✖️', 'Fractions': '🔢'
+        };
+        const chapitreAr = {
+            'Addition': 'الجمع', 'Soustraction': 'الطرح',
+            'Multiplication': 'الضرب', 'Fractions': 'الكسور'
+        };
+
+        const emoji     = chapitreEmojis[chapitre] || '';
+        const chapLabel = langueActuelle === 'العربية'
+            ? `${emoji} ${chapitreAr[chapitre]}`
+            : `${emoji} ${chapitre}`;
+
+        document.getElementById('current-badge').innerHTML =
+            `${niveauLabel} &nbsp;|&nbsp; ${chapLabel}`;
+    }
+
+    // ============================================================
+    // ENVOYER MESSAGE
+    // ============================================================
+    async function sendMessage() {
+        const input   = document.getElementById('user-input');
+        const message = input.value.trim();
+        if (!message) return;
+
+        const niveau   = document.getElementById('niveau-select').value;
+        const chapitre = document.getElementById('chapitre-select').value;
+
+        addMessage(message, 'user');
+        input.value = '';
+        showTyping();
+
+        try {
+            const response = await fetch(`${API_URL}/chat`, {
+                method:  'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    message,
+                    session_id: sessionId,
+                    niveau,
+                    chapitre,
+                    langue: langueActuelle
+                })
+            });
+
+            const data = await response.json();
+            hideTyping();
+
+            if (data.status === 'success') {
+                addMessage(data.response, 'assistant');
+                updateEtape(data.etape);
+                if (data.etape === 'felicitations') {
+                    score.bonnes++;
+                    score.total++;
+                    updateScore();
+                } else if (data.etape === 'quiz') {
+                    score.total++;
+                    updateScore();
+                }
+            } else {
+                addMessage('❌ Erreur : ' + (data.error || 'Inconnue'), 'assistant');
+            }
+
+        } catch (error) {
+            hideTyping();
+            addMessage(
+                langueActuelle === 'العربية'
+                    ? '❌ لا يمكن الاتصال بالخادم. تأكد من تشغيل Flask !'
+                    : '❌ Impossible de contacter le tuteur.\nVérifie que Flask est lancé sur le port 5000 !',
+                'assistant'
+            );
+        }
+    }
+
+    // ============================================================
+    // MARKDOWN → HTML
+    // ============================================================
+    function markdownToHtml(text) {
+        return text
+            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+            .replace(/\*(.*?)\*/g,     '<em>$1</em>')
+            .replace(/\n/g,            '<br>');
+    }
+
+    // ============================================================
+    // AJOUTER MESSAGE
+    // ============================================================
+    function addMessage(text, role) {
+        const container = document.getElementById('chat-messages');
+        const typing    = document.getElementById('typing-indicator');
+        const isAr      = langueActuelle === 'العربية';
+        const htmlText  = markdownToHtml(text);
+
+        const messageDiv = document.createElement('div');
+        messageDiv.className = `message message-${role}`;
+
+        if (role === 'user') {
+            messageDiv.innerHTML = `
+                <div class="bubble bubble-user ${isAr ? 'rtl' : ''}" dir="${isAr ? 'rtl' : 'ltr'}">${htmlText}</div>
+                <div class="avatar avatar-user">👦</div>
+            `;
+            if (isAr) messageDiv.style.flexDirection = 'row-reverse';
+        } else {
+            messageDiv.innerHTML = `
+                <div class="avatar avatar-assistant">🧮</div>
+                <div class="bubble bubble-assistant ${isAr ? 'rtl' : ''}" dir="${isAr ? 'rtl' : 'ltr'}">${htmlText}</div>
+            `;
+            if (isAr) messageDiv.style.flexDirection = 'row-reverse';
+        }
+
+        container.insertBefore(messageDiv, typing);
+        container.scrollTop = container.scrollHeight;
+    }
+
+    // ============================================================
+    // TYPING INDICATOR
+    // ============================================================
+    function showTyping() {
+        document.getElementById('typing-indicator').style.display = 'block';
+        document.getElementById('chat-messages').scrollTop = 99999;
+    }
+
+    function hideTyping() {
+        document.getElementById('typing-indicator').style.display = 'none';
+    }
+
+    // ============================================================
+    // MISE À JOUR ÉTAPE
+    // ============================================================
+    const ETAPES_LABELS = {
+        'Français': {
+            amorce:        '❓ Question d\'amorce',
+            encouragement: '🌟 Encouragement',
+            explication:   '💡 Explication',
+            exercice:      '✏️ Exercice',
+            quiz:          '🎯 Quiz',
+            felicitations: '🏆 Félicitations !'
+        },
+        'العربية': {
+            amorce:        '❓ سؤال البداية',
+            encouragement: '🌟 تشجيع',
+            explication:   '💡 شرح',
+            exercice:      '✏️ تمرين',
+            quiz:          '🎯 اختبار',
+            felicitations: '🏆 تهانينا !'
+        }
+    };
+
+    function updateEtape(etape) {
+        if (!etape) return;
+        const badge = document.getElementById('etape-badge');
+        const label = ETAPES_LABELS[langueActuelle][etape];
+        if (label) {
+            badge.textContent  = label;
+            badge.style.display = 'block';
+        }
+    }
+
+    // ============================================================
+    // MISE À JOUR SCORE
+    // ============================================================
+    function updateScore() {
+        const t        = TRADUCTIONS[langueActuelle];
+        const scoreBar = document.getElementById('score-bar');
+        scoreBar.textContent  = t.score(score.bonnes, score.total);
+        scoreBar.style.display = 'block';
+    }
+
+    // ============================================================
+    // ENTER KEY
+    // ============================================================
+    function handleKeyPress(event) {
+        if (event.key === 'Enter') sendMessage();
+    }
+
+    // ============================================================
+    // RÉINITIALISER
+    // ============================================================
+    async function resetConversation() {
+        try {
+            await fetch(`${API_URL}/reset`, {
+                method:  'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ session_id: sessionId })
+            });
+        } catch (e) {}
+
+        sessionId = generateSessionId();
+        score     = { bonnes: 0, total: 0 };
+        document.getElementById('score-bar').style.display   = 'none';
+        document.getElementById('etape-badge').style.display = 'none';
+
+        const container = document.getElementById('chat-messages');
+        const typing    = document.getElementById('typing-indicator');
+        container.innerHTML = '';
+        container.appendChild(typing);
+
+        const niveau   = document.getElementById('niveau-select').value;
+        const chapitre = document.getElementById('chapitre-select').value;
+        const t        = TRADUCTIONS[langueActuelle];
+        addMessage(t.bienvenue(niveau, chapitre), 'assistant');
+    }
+
+    // ============================================================
+    // AIDE
+    // ============================================================
+    function showHelp() {
+        addMessage(TRADUCTIONS[langueActuelle].aide, 'assistant');
+    }
+
+    // ============================================================
+    // PROGRESSION
+    // ============================================================
+    function showProgress() {
+        const msg = langueActuelle === 'Français'
+            ? `⭐ **Ta progression** :\n\n✅ Bonnes réponses : ${score.bonnes}\n📊 Total : ${score.total}\n🎯 Score : ${score.total > 0 ? Math.round((score.bonnes/score.total)*100) : 0}%\n\nContinue comme ça ! 🌟`
+            : `⭐ **تقدمك** :\n\n✅ الإجابات الصحيحة : ${score.bonnes}\n📊 المجموع : ${score.total}\n🎯 النتيجة : ${score.total > 0 ? Math.round((score.bonnes/score.total)*100) : 0}%\n\nأحسنت ! واصل هكذا ! 🌟`;
+        addMessage(msg, 'assistant');
+    }
+
+    // ============================================================
+    // UTILITAIRES
+    // ============================================================
+    function generateSessionId() {
+        return Math.random().toString(36).substr(2, 9);
+    }
+
+    // ============================================================
+    // INITIALISATION AU CHARGEMENT
+    // ============================================================
+    window.onload = function() {
+        // Mettre à jour les chapitres selon le niveau par défaut (3ème année)
+        const niveauDefaut = document.getElementById('niveau-select').value;
+        updateChapitres(niveauDefaut);
+        updateBadge();
+
+        // Message de bienvenue initial
+        const t        = TRADUCTIONS[langueActuelle];
+        const niveau   = document.getElementById('niveau-select').value;
+        const chapitre = document.getElementById('chapitre-select').value;
+        addMessage(t.bienvenue(niveau, chapitre), 'assistant');
+    };
+</script>
+</body>
+</html>
