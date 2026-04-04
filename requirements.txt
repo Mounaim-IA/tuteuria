@@ -7,10 +7,10 @@ langchain-community
 langchain-text-splitters
 openai
 chromadb==0.4.24
+numpy<2.0.0
 python-dotenv
 pypdf
 beautifulsoup4
 requests
 gunicorn
 protobuf==4.25.3
-
