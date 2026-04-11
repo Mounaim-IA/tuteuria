@@ -1144,17 +1144,17 @@ if not chat_actif:
     # Bandeau compact animé
     if langue_choisie == "Français":
         titre_html = (
-            "<span style=\"font-size:1.05rem; font-weight:400; color:#F5A623;\">🧮 Bienvenue ! "
+            "<span style=\"font-size:1.05rem; font-weight:400; color:#04342C;\">🧮 Bienvenue ! "
             "Je suis ton tuteur IA en mathématiques.</span><br>"
-            "<span style=\"font-size:0.87rem; font-weight:400; color:#F5A623; opacity:0.9;\">"
+            "<span style=\"font-size:0.87rem; font-weight:400; color:#04342C; opacity:0.9;\">"
             "Veuillez écrire ton prénom, sélectionner un niveau et cliquer sur Commencer."
             "</span>"
         )
     else:
         titre_html = (
-            "<span style=\"font-size:1.05rem; font-weight:400; color:#F5A623;\">🧮 مرحباً ! "
+            "<span style=\"font-size:1.05rem; font-weight:400; color:#04342C;\">🧮 مرحباً ! "
             "أنا معلمك الذكي في الرياضيات.</span><br>"
-            "<span style=\"font-size:0.87rem; font-weight:400; color:#F5A623; opacity:0.9;\">"
+            "<span style=\"font-size:0.87rem; font-weight:400; color:#04342C; opacity:0.9;\">"
             "يرجى كتابة اسمك واختيار مستواك والنقر على ابدأ."
             "</span>"
         )
