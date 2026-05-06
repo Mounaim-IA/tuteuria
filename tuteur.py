@@ -1565,24 +1565,7 @@ else:
         unsafe_allow_html=True
     )
 
-    # ── Barre de progression élève (moitié largeur) ─────────────
-    etape_label = ETAPES[langue_choisie].get(etape_actuelle, "")
-    etapes_ordre = ["amorce", "explication", "exercice", "correction", "quiz", "felicitations"]
-    etape_idx = etapes_ordre.index(etape_actuelle) if etape_actuelle in etapes_ordre else 0
-    progression_pct = int((etape_idx / (len(etapes_ordre) - 1)) * 100)
-
-    if langue_choisie == "Français":
-        lbl_progression = "📈 Ta progression"
-        lbl_score_prog  = f"⭐ {st.session_state[score_key]['bonnes']}/{st.session_state[score_key]['total']}"
-        etapes_labels   = ["Démarrage", "Explication", "Exercice", "Correction", "Quiz", "🏆 Bravo !"]
-    else:
-        lbl_progression = "📈 تقدمك"
-        lbl_score_prog  = f"⭐ {st.session_state[score_key]['bonnes']}/{st.session_state[score_key]['total']}"
-        etapes_labels   = ["البداية", "الشرح", "التمرين", "التصحيح", "الاختبار", "🏆 أحسنت !"]
-
-    etape_lbl_actuelle = etapes_labels[etape_idx] if etape_idx < len(etapes_labels) else ""
-
-    # ── Barre taux de réussite FIXE en haut — Option A+ ──────────
+    # ── Barre taux de réussite — sticky sous header ─────────────
     sc = st.session_state[score_key]
     taux_actuel = round(sc["bonnes"] / sc["total"] * 100) if sc["total"] >= 2 else 0
 
@@ -1612,46 +1595,53 @@ else:
         titre_barre = f"🏅 نسبة النجاح {star}"
         lbl_score_b = f"{sc['bonnes']}/{sc['total']}"
 
-    # Barre FIXE en haut (sous le header)
+    # Barre sticky dans le CSS global
     st.markdown(f"""
-    <div id="barre-reussite" style="
-        position: fixed;
+    <style>
+    #barre-reussite-wrap {{
+        position: sticky;
         top: 58px;
-        left: 0;
-        right: 0;
-        z-index: 9998;
+        z-index: 999;
         background: white;
-        padding: 6px 16px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        font-family: 'Fredoka One', cursive;
-    ">
-        <span style="font-size:12px; color:#0F6E56; font-weight:700;
-                     white-space:nowrap; min-width:140px;">
-            {titre_barre}
-        </span>
-        <div style="flex:1; background:#f0f0f0; border-radius:20px;
-                    height:14px; overflow:hidden;
-                    box-shadow:inset 0 2px 4px rgba(0,0,0,0.1);">
-            <div style="
-                background: linear-gradient(90deg, {bar_color});
-                width: {taux_affiche}%;
-                height: 100%;
-                border-radius: 20px;
-                transition: width 0.8s ease;
-            "></div>
+        padding: 5px 0;
+        margin-bottom: 8px;
+    }}
+    </style>
+    <div id="barre-reussite-wrap">
+        <div style="
+            background: white;
+            border-radius: 16px;
+            border: 1.5px solid #4ECDC4;
+            padding: 7px 14px;
+            box-shadow: 0 3px 10px rgba(78,205,196,0.15);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-family: 'Fredoka One', cursive;
+        ">
+            <span style="font-size:12px; color:#0F6E56; font-weight:700;
+                         white-space:nowrap;">
+                {titre_barre}
+            </span>
+            <div style="flex:1; background:#f0f0f0; border-radius:20px;
+                        height:14px; overflow:hidden;
+                        box-shadow:inset 0 2px 4px rgba(0,0,0,0.08);">
+                <div style="
+                    background: linear-gradient(90deg, {bar_color});
+                    width: {taux_affiche}%;
+                    height: 100%;
+                    border-radius: 20px;
+                "></div>
+            </div>
+            <span style="font-size:15px; color:#0F6E56; font-weight:800;
+                         min-width:42px; text-align:right;">
+                {taux_affiche}%
+            </span>
+            <span style="font-size:10px; color:#aaa; white-space:nowrap;">
+                ({lbl_score_b})
+            </span>
         </div>
-        <span style="font-size:14px; color:#0F6E56; font-weight:800;
-                     min-width:45px; text-align:right;">
-            {taux_affiche}%
-        </span>
-        <span style="font-size:11px; color:#888; white-space:nowrap;">
-            ({lbl_score_b})
-        </span>
     </div>
-    <div style="height:36px;"></div>
     """, unsafe_allow_html=True)
 
         # ── Badge félicitations ────────────────────────────────────
