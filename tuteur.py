@@ -1361,17 +1361,46 @@ CHOIX_OPERATIONS = {
 
 
 def detecter_operation_demandee(message):
-    """Détecte quelle opération l'élève demande. Retourne le nom ou None."""
-    msg = (message or "").lower()
-    if any(mot in msg for mot in ["addition", "ajouter", "additionner", "الجمع"]):
+    """
+    Détecte quelle opération l'élève demande via GPT.
+    GPT comprend le langage naturel, les fautes, les synonymes et l'arabe.
+    Fallback rapide par mots-clés si GPT échoue.
+    Retourne : "addition", "soustraction", "multiplication", "division", "fractions" ou None.
+    """
+    msg = (message or "").strip()
+    if not msg or len(msg) < 3:
+        return None
+
+    # ── Appel GPT pour classification (1 mot en sortie) ──
+    try:
+        classification_prompt = (
+            f'Un élève de primaire écrit : "{msg}"\n\n'
+            f'Quelle opération mathématique demande-t-il ?\n'
+            f'Réponds UNIQUEMENT avec UN seul mot parmi :\n'
+            f'addition, soustraction, multiplication, division, fractions, autre\n'
+            f'Rien d\'autre que ce mot, pas de ponctuation.'
+        )
+        result = llm_classifier.invoke([HumanMessage(content=classification_prompt)])
+        op = result.content.strip().lower().split()[0]
+        if op in ["addition", "soustraction", "multiplication", "division", "fractions"]:
+            return op
+        if op == "autre":
+            return None
+    except Exception:
+        pass
+
+    # ── Fallback mots-clés (si GPT indisponible) ──
+    m = msg.lower()
+    if any(x in m for x in ["addition","ajouter","additionner","الجمع"]):
         return "addition"
-    if any(mot in msg for mot in ["soustraction", "soustraire", "enlever", "الطرح"]):
+    if any(x in m for x in ["soustraction","soustraire","enlever","الطرح"]):
         return "soustraction"
-    if any(mot in msg for mot in ["multiplication", "multiplie", "fois", "table", "الضرب", "جدول"]):
+    if any(x in m for x in ["multiplication","multiplie","fois","table","الضرب"]):
         return "multiplication"
-    if any(mot in msg for mot in ["division", "divise", "partage", "القسمة"]):
+    if any(x in m for x in ["division","divise","diviser","partage","partitionner",
+                              "répartir","distribuer","entre","القسمة"]):
         return "division"
-    if any(mot in msg for mot in ["fraction", "كسر", "كسور", "moitié", "quart"]):
+    if any(x in m for x in ["fraction","moitié","quart","كسر"]):
         return "fractions"
     return None
 
@@ -1504,14 +1533,21 @@ def detecter_probleme_enonce(message):
 
     # Indicateurs d'un problème énoncé
     mots_probleme_fr = [
-        "ali", "karim", "sara", "fatima", "ahmed",  # prénoms courants
+        # Prénoms courants
+        "ali", "karim", "sara", "fatima", "ahmed", "mounaim", "youssef", "dina",
+        # Verbes contextuels
         "il a", "elle a", "il y a", "combien", "quel est", "quelle est",
         "au total", "en tout", "restent", "reste-t-il", "manque",
-        "achète", "vend", "donne", "reçoit", "partage",
-        "paquets", "sacs", "boîtes", "kilos", "litres", "mètres",
-        "élèves", "enfants", "pommes", "bonbons", "oranges",
+        "achète", "vend", "donne", "reçoit", "partage", "partager",
+        "partitionner", "répartir", "distribuer", "séparer",
+        "entre", "chacun", "par personne", "par enfant",
+        # Objets et unités
+        "paquets", "sacs", "boîtes", "kilos", "kg", "grammes", "litres", "mètres",
+        "élèves", "enfants", "pommes", "bonbons", "oranges", "personnes",
         "chaque", "par jour", "par semaine",
-        "problème", "résous", "calcule", "trouve",
+        # Demandes
+        "problème", "résous", "calcule", "trouve", "comment faire", "comment partager",
+        "je veux", "aide-moi", "comment calculer",
     ]
     mots_probleme_ar = [
         "علي", "كريم", "سارة", "فاطمة", "أحمد",
@@ -2312,6 +2348,18 @@ def get_llm(_api_key):
     )
 
 llm = get_llm(api_key)
+
+# LLM léger pour la classification d'intention (rapide + économique)
+@st.cache_resource
+def get_llm_classifier(_api_key):
+    return ChatOpenAI(
+        model="gpt-4o-mini",
+        temperature=0,
+        api_key=_api_key,
+        max_tokens=10   # 1 mot suffit
+    )
+
+llm_classifier = get_llm_classifier(api_key)
 
 # ============================================================
 # 12. GESTION DE L'ÉTAT
