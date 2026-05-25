@@ -32,7 +32,7 @@ except Exception:
     supabase = None
 
 import os as _os2
-ADMIN_PASSWORD = st.secrets.get("ADMIN_PASSWORD", "") or _os2.getenv("ADMIN_PASSWORD", "admiN@26")
+ADMIN_PASSWORD = st.secrets.get("ADMIN_PASSWORD", "") or _os2.getenv("ADMIN_PASSWORD", "")
 
 def db_creer_session(prenom, niveau, langue):
     """Crée une session dans Supabase et retourne son ID."""
@@ -384,7 +384,7 @@ UI = {
         "thinking":     "🤔 Je réfléchis...",
         "score_text":   "⭐ Score : {bonnes}/{total} bonnes réponses",
         "help_text":    "💡 **Aide** :\n\n- Réponds aux questions du tuteur.\n- Ne t'inquiète pas si tu te trompes ! 😊",
-        "footer":       "🧮 TuteurIA | Mounaim 2026 🌟"
+        "footer":       "🧮 TuteurIA | Mounaim 2026"
     },
     "العربية": {
         "app_title":    "مُعلِّم الرياضيات الذكي",
@@ -399,7 +399,7 @@ UI = {
         "thinking":     "🤔 أفكّر...",
         "score_text":   "⭐ النتيجة : {bonnes}/{total} إجابات صحيحة",
         "help_text":    "💡 **مساعدة** :\n\n- أجب على أسئلة المعلم.\n- لا تقلق إذا أخطأت ! 😊",
-        "footer":       "🧮 مُعلِّم الرياضيات للتعليم الابتدائي 🌟"
+        "footer":       "🧮 TuteurIA | Mounaim 2026"
     }
 }
 
@@ -638,38 +638,43 @@ vectorstore = load_vectorstore()
 def extraire_exercice(historique):
     """
     Extrait l'expression mathématique du dernier exercice posé par le tuteur.
-    Calcule le résultat EXACT en respectant les priorités opératoires :
-      - × et ÷ avant + et −
-      - gauche → droite pour opérations de même priorité
-    Retourne aussi les étapes détaillées pour que GPT les utilise correctement.
+    Prend le DERNIER calcul dans le dernier message assistant (après ✏️ ou 🎯).
+    Gère le cas où un message de correction contient plusieurs calculs
+    (ex: correction de 16-7 puis nouvelle question 12-4).
     """
     for msg in reversed(historique):
         if isinstance(msg, AIMessage):
             texte = msg.content
+            # Normaliser le signe moins Unicode → ASCII
+            texte = texte.replace('−', '-')
+
+            # Trouver la position du DERNIER emoji exercice
             pos = -1
-            if "✏️" in texte:
-                pos = texte.rindex("✏️")
-            elif "🎯" in texte:
+            if "🎯" in texte:
                 pos = texte.rindex("🎯")
+            elif "✏️" in texte:
+                pos = texte.rindex("✏️")
 
             if pos >= 0:
                 texte_exercice = texte[pos:]
-                match = re.search(r'(\d+(?:\s*[+\-×*x÷/]\s*\d+)+)', texte_exercice)
-                if match:
-                    expression_brute = match.group(1).strip()
-                    # Normaliser les symboles pour Python
+                # Trouver TOUS les calculs après le dernier emoji
+                # et prendre le DERNIER (cas où correction + nouvelle question)
+                matches = list(re.finditer(
+                    r'(\d+(?:[,\.]\d+)?(?:\s*[+\-×*x÷/]\s*\d+(?:[,\.]\d+)?)+)',
+                    texte_exercice
+                ))
+                if matches:
+                    # Prendre le DERNIER match (le plus proche de la fin)
+                    expression_brute = matches[-1].group(1).strip()
                     calcul_python = (expression_brute
                                      .replace('×', '*').replace('x', '*')
-                                     .replace('÷', '/').replace(' ', ''))
+                                     .replace('÷', '/').replace(',', '.')
+                                     .replace(' ', ''))
                     try:
                         resultat = eval(calcul_python)
-                        # Résultat entier si possible
                         if isinstance(resultat, float) and resultat == int(resultat):
                             resultat = int(resultat)
-
-                        # Générer les étapes de calcul détaillées (gauche → droite)
                         etapes = calculer_etapes(calcul_python)
-
                         return (expression_brute, "mixte", "mixte", resultat, etapes)
                     except Exception:
                         return None
@@ -761,6 +766,9 @@ def verifier_reponse(user_message, historique):
     """
     exercice = extraire_exercice(historique)
     if not exercice: return None
+    # Normaliser le signe moins Unicode → ASCII
+    user_message = user_message.replace('−', '-')
+    exercice = extraire_exercice(historique)
     resultat_attendu = exercice[3]
     etapes = exercice[4] if len(exercice) > 4 else []
     # Expression avec opérateurs → évaluer
@@ -779,8 +787,43 @@ def verifier_reponse(user_message, historique):
     if not nombres: return None
     try: reponse_eleve = int(nombres[0])
     except ValueError: return None
+
+    # ── Division euclidienne : vérifier quotient + reste ──
+    exercice = extraire_exercice(historique)
+    if exercice:
+        expr = exercice[0]
+        if '÷' in expr or '/' in expr:
+            # Extraire a et b de "a ÷ b"
+            parts = re.split(r'[÷/]', expr.replace(' ', ''))
+            if len(parts) == 2:
+                try:
+                    a, b = int(parts[0]), int(parts[1])
+                    quotient = a // b
+                    reste = a % b
+                    msg_lower = user_message.lower()
+                    # L'élève a donné quotient + reste ?
+                    if any(mot in msg_lower for mot in ["reste", "الباقي", "r"]):
+                        nombres_trouves = re.findall(r'\d+', user_message)
+                        if len(nombres_trouves) >= 2:
+                            q_eleve = int(nombres_trouves[0])
+                            r_eleve = int(nombres_trouves[1])
+                            if q_eleve == quotient and r_eleve == reste:
+                                return 'correct'
+                            else:
+                                etapes_div = [f"{a} ÷ {b} = {quotient} reste {reste}"]
+                                return f'incorrect:{quotient} reste {reste}:{"| ".join(etapes_div)}'
+                    # L'élève a donné juste le quotient (sans reste)
+                    if reponse_eleve == quotient and reste == 0:
+                        return 'correct'
+                    elif reponse_eleve == quotient and reste != 0:
+                        # Quotient correct mais reste manquant
+                        etapes_div = [f"{a} ÷ {b} = {quotient} reste {reste}"]
+                        return f'presque:{quotient} reste {reste}:{"| ".join(etapes_div)}'
+                except (ValueError, ZeroDivisionError):
+                    pass
+
     return ('correct' if reponse_eleve == resultat_attendu
-            else f'incorrect:{resultat_attendu}:{"|".join(etapes)}')
+            else f'incorrect:{resultat_attendu}:{"| ".join(etapes)}')
 
 
 def est_nouvelle_expression(message):
@@ -869,6 +912,18 @@ def injecter_verdict(user_message, historique, langue):
                     f"La réponse est juste.\n"
                     f"Étapes exactes : {etapes_str}\n"
                     f"Dis Bravo, rappelle ces étapes exactes et passe à la suite]")
+    elif parties[0] == 'presque':
+        resultat = parties[1]
+        if langue == "العربية":
+            return (f"{user_message}\n[VERDICT PYTHON: PRESQUE CORRECT 🟡\n"
+                    f"القسمة = {resultat}\n"
+                    f"التلميذ أعطى الحاصل الصحيح لكنه نسي الباقي.\n"
+                    f"قل 'أحسنت! الحاصل صحيح 👏 لكن لا تنسَ الباقي! كم يساوي الباقي؟ 🤔']")
+        else:
+            return (f"{user_message}\n[VERDICT PYTHON: PRESQUE CORRECT 🟡\n"
+                    f"Division = {resultat}\n"
+                    f"L'élève a donné le bon quotient mais a oublié le reste.\n"
+                    f"Dis 'Bravo pour le quotient ! 👏 Mais n'oublie pas le reste ! Combien reste-t-il ? 🤔']")
     else:
         resultat = parties[1]
         etapes_str = " → ".join(parties[2].split('|')) if len(parties) > 2 and parties[2] else ""
@@ -876,27 +931,28 @@ def injecter_verdict(user_message, historique, langue):
         if langue == "العربية":
             return (
                 f"{user_message}\n[VERDICT PYTHON: INCORRECT ❌\n"
-                f"الجواب الصحيح = {resultat} (سري — لا تقله الآن)\n"
+                f"الجواب الصحيح = {resultat}\n"
                 f"الخطوات الصحيحة بالترتيب : {etapes_str}\n"
-                f"1. شجع الطالب بلطف 😊 — بدون ذكر الجواب\n"
-                f"2. اشرح الطريقة بالخطوات أعلاه — بدون ذكر الجواب\n"
-                f"3. اطرح سؤالاً سقراطياً يوجهه نحو الجواب — لا تقل {resultat}\n"
-                f"STOP هنا. انتظر أن يحاول التلميذ مجدداً. لا تعطِ الجواب الآن.]"
+                f"1. شجع الطالب بلطف 😊\n"
+                f"2. اشرح الخطوات بالضبط كما هي أعلاه (لا تبتكر خطوات أخرى)\n"
+                f"3. أعطِ الجواب الصحيح = {resultat}\n"
+                f"4. أعطِ تمريناً جديداً وانتظر جواب الطالب]"
             )
         else:
             return (
                 f"{user_message}\n[VERDICT PYTHON: INCORRECT ❌\n"
-                f"Résultat exact = {resultat} (CONFIDENTIEL — ne pas révéler maintenant)\n"
-                f"Étapes exactes : {etapes_str}\n"
-                f"1. Encourage chaleureusement SANS mentionner {resultat}\n"
-                f"2. Explique la MÉTHODE avec les étapes ci-dessus SANS donner {resultat}\n"
-                f"3. Pose UNE question socratique pour guider vers la réponse\n"
-                f"STOP ici. Attends que l'élève réponde. NE RÉVÈLE PAS {resultat} maintenant.]"
+                f"Résultat correct = {resultat}\n"
+                f"Étapes exactes dans l'ordre : {etapes_str}\n"
+                f"1. Encourage l'élève avec douceur 😊\n"
+                f"2. Explique CES étapes exactement telles qu'elles sont ci-dessus (ne les invente pas)\n"
+                f"3. Donne la bonne réponse = {resultat}\n"
+                f"4. Donne un nouvel exercice et attends la réponse]"
             )
 
 
 def nettoyer_reponse(reply):
-    """Supprime LaTeX, noms d'étapes et markdown."""
+    """Supprime LaTeX, noms d'étapes et TOUT le markdown interdit (D9)."""
+    # ── Étiquettes pédagogiques internes ──
     etiquettes = [
         r'📖\s*EXPLICATION\s*[:\-–—]*\s*',
         r'✏️\s*EXERCICE\s*[:\-–—]*\s*\d*\s*',
@@ -909,12 +965,57 @@ def nettoyer_reponse(reply):
     ]
     for pattern in etiquettes:
         reply = re.sub(pattern, '', reply)
+
+    # ── LaTeX ──
     reply = re.sub(r'\\\((.+?)\\\)', r'\1', reply)
     reply = re.sub(r'\\\[(.+?)\\\]', r'\1', reply)
-    # Supprimer markdown gras/italique
-    reply = re.sub(r'\*\*(.+?)\*\*', r'\1', reply)
-    reply = re.sub(r'\*(.+?)\*', r'\1', reply)
+
+    # ── Blocs de code (``` ... ``` ou ` ... `) ──
+    # Blocs multi-lignes : remplacer par le contenu sans backticks
+    reply = re.sub(r'```[a-zA-Z]*\n(.*?)\n```', r'\1', reply, flags=re.DOTALL)
+    reply = re.sub(r'```(.*?)```', r'\1', reply, flags=re.DOTALL)
+    # Code inline
+    reply = re.sub(r'`([^`]+)`', r'\1', reply)
+
+    # ── Titres markdown (# ## ###) ──
+    reply = re.sub(r'^#{1,6}\s+', '', reply, flags=re.MULTILINE)
+
+    # ── Listes numérotées (1. 2. 3.) → retirer le numéro et le point ──
+    reply = re.sub(r'^\s*\d+\.\s+', '', reply, flags=re.MULTILINE)
+
+    # ── Listes à puces (* - •) en début de ligne ──
+    reply = re.sub(r'^\s*[\*\-•]\s+', '', reply, flags=re.MULTILINE)
+    # ── Astérisques isolés utilisés comme séparateurs dans le texte ──
+    # Ex: "27 * 35" ou "+ * 35" → remplacer par espace
+    reply = re.sub(r'\s\*\s', ' ', reply)
+    # Astérisque en début de mot sans markdown (ex: "*35" seul)
+    reply = re.sub(r'(?<!\*)\*(?!\*)', ' ', reply)
+
+    # ── Gras / Italique ──
+    reply = re.sub(r'\*\*\*(.+?)\*\*\*', r'\1', reply)   # bold+italic
+    reply = re.sub(r'\*\*(.+?)\*\*', r'\1', reply)         # bold
+    reply = re.sub(r'\*([^\s*][^*]*)\*', r'\1', reply)     # italic (évite * isolé)
     reply = re.sub(r'__(.+?)__', r'\1', reply)
+    reply = re.sub(r'_([^_]+)_', r'\1', reply)
+
+    # ── Liens markdown [texte](url) → texte ──
+    reply = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', reply)
+
+    # ── Caractères superscripts utilisés comme notation (²4, ¹7, ⁷) ──
+    # Remplacer par des espaces pour éviter la confusion
+    superscripts = str.maketrans('⁰¹²³⁴⁵⁶⁷⁸⁹', '0123456789')
+    reply = reply.translate(superscripts)
+
+    # ── Lignes horizontales (--- ou ===) ──
+    reply = re.sub(r'^\s*[-=]{3,}\s*$', '', reply, flags=re.MULTILINE)
+
+# ── Nettoyer les lignes vides multiples → max 1 ligne vide ──
+    reply = re.sub(r'\n{3,}', '\n\n', reply)
+
+    # ── Supprimer les tentatives de décomposition verticale ──
+    reply = re.sub(r'```[\s\S]*?```', '', reply)
+    reply = re.sub(r'(\d+\s*\n\s*){2,}', '', reply)
+
     return reply.strip()
 
 
@@ -927,8 +1028,7 @@ def post_traitement(reply, user_input, historique, langue):
         return reply
 
     resultat_correct = verdict.split(':')[1]
-    mots_fr = ['bravo', 'correct', 'exact', 'parfait', 'excellent', 'très bien', 'super', 'juste',
-               'bien essayé', 'bien tenté', 'bonne tentative']
+    mots_fr = ['bravo', 'correct', 'exact', 'parfait', 'excellent', 'très bien', 'super', 'juste']
     mots_ar = ['أحسنت', 'صحيح', 'ممتاز', 'رائع', 'جيد']
     gpt_faux = any(m in reply.lower() for m in mots_fr) or any(m in reply for m in mots_ar)
 
@@ -944,10 +1044,9 @@ def post_traitement(reply, user_input, historique, langue):
         reply_clean = re.sub(r',?\s*pas\s*\d+', '', reply_clean)
         
         if langue == "العربية":
-            return f"الجواب الصحيح هو **{resultat_correct}**. 😊\n\n{reply_clean}"
+            return f"الجواب الصحيح هو {resultat_correct}. 😊\n\n{reply_clean}"
         else:
-            # Ici, on ne met que la bonne réponse, sans le ", pas X"
-            return f"La bonne réponse est **{resultat_correct}**. 😊\n\n{reply_clean}"
+            return f"La bonne réponse est {resultat_correct}. 😊\n\n{reply_clean}"
             
     return reply
 
@@ -999,7 +1098,7 @@ def message_negatif(message, langue: str) -> str:
         return (
             f"Quelle bonne curiosité ! 🌟\n\n"
             f"Imagine : si tu as {a} bonbons 🍬, est-ce que tu peux en donner {b} à tes amis ? Non, car tu n'en as pas assez ! 😊\n\n"
-            f"En primaire, on retire toujours un petit nombre d'un plus grand. Les nombres négatifs, c'est une autre aventure ! 🚀\n\n"
+            f"En primaire, on retire toujours un petit nombre d'un plus grand. Les nombres négatifs, c'est une autre aventure ! \n\n"
             f"Essaie en mettant le plus grand nombre en premier ! 💪"
         )
 
@@ -1029,98 +1128,96 @@ def detecter_message_incomprehensible(message: str) -> bool:
 # ============================================================
 # 9ter. IMAGES PÉDAGOGIQUES — Approche hybride d'étayage
 # ============================================================
-# Phase d'explication (Étape 2) : images statiques préconçues
-# Phase de correction (Étape 4) : texte dynamique GPT
-# Ref: Section 4.2.4 du rapport
+# Chemins absolus pour fonctionner sur Streamlit Cloud
+_IMG_FR = os.path.join(ABS_PATH, "images", "fr")
+_IMG_AR = os.path.join(ABS_PATH, "images", "ar")
+
+def _fr(f): return os.path.join(_IMG_FR, f)
+def _ar(f): return os.path.join(_IMG_AR, f)
 
 IMAGES_MAP = {
     "Français": {
-        # Addition
-        "addition_simple":       os.path.join(ABS_PATH, "images/fr/26_addition_simple_visuelle.png"),
-        "addition_sans_retenue": os.path.join(ABS_PATH, "images/fr/01_addition_sans_retenue.png"),
-        "addition_avec_retenue": os.path.join(ABS_PATH, "images/fr/02_addition_avec_retenue.png"),
-        "addition_3_chiffres":   os.path.join(ABS_PATH, "images/fr/11_addition_3_chiffres.png"),
-        "addition_decimaux":     os.path.join(ABS_PATH, "images/fr/21_addition_decimaux.png"),
-        # Soustraction
-        "soustraction_simple":         os.path.join(ABS_PATH, "images/fr/27_soustraction_simple_visuelle.png"),
-        "soustraction_sans_retenue":   os.path.join(ABS_PATH, "images/fr/03_soustraction_sans_retenue.png"),
-        "soustraction_avec_retenue":   os.path.join(ABS_PATH, "images/fr/04_soustraction_avec_retenue.png"),
-        "soustraction_3_chiffres":     os.path.join(ABS_PATH, "images/fr/12_soustraction_3_chiffres.png"),
-        "soustraction_double_emprunt": os.path.join(ABS_PATH, "images/fr/38_soustraction_double_emprunt.png"),
-        "soustraction_decimaux":       os.path.join(ABS_PATH, "images/fr/22_soustraction_decimaux.png"),
-        # Multiplication
-        "multiplication_simple":       os.path.join(ABS_PATH, "images/fr/05_multiplication_simple.png"),
-        "multiplication_2_chiffres":   os.path.join(ABS_PATH, "images/fr/06_multiplication_deux_chiffres.png"),
-        "multiplication_3_chiffres":   os.path.join(ABS_PATH, "images/fr/29_multiplication_3_chiffres.png"),
-        "multiplication_10_100_1000":  os.path.join(ABS_PATH, "images/fr/13_multiplication_10_100_1000.png"),
-        "multiplication_decimaux":     os.path.join(ABS_PATH, "images/fr/23_multiplication_decimaux.png"),
-        "tables_multiplication":       os.path.join(ABS_PATH, "images/fr/09_tables_multiplication.png"),
-        # Division
-        "division_simple":           os.path.join(ABS_PATH, "images/fr/07_division_simple.png"),
-        "division_avec_reste":       os.path.join(ABS_PATH, "images/fr/08_division_avec_reste.png"),
-        "division_2_chiffres":       os.path.join(ABS_PATH, "images/fr/14_division_2_chiffres.png"),
-        "division_decimale":         os.path.join(ABS_PATH, "images/fr/24_division_decimale.png"),
-        "division_diviseur_decimal": os.path.join(ABS_PATH, "images/fr/36_division_diviseur_decimal.png"),
-        # Fractions
-        "fractions_introduction":    os.path.join(ABS_PATH, "images/fr/15_fractions_introduction.png"),
-        "fractions_equivalentes":    os.path.join(ABS_PATH, "images/fr/16_fractions_equivalentes.png"),
-        "simplification_fractions":  os.path.join(ABS_PATH, "images/fr/35_simplification_fractions.png"),
-        "addition_fractions":        os.path.join(ABS_PATH, "images/fr/17_addition_fractions.png"),
-        "soustraction_fractions":    os.path.join(ABS_PATH, "images/fr/18_soustraction_fractions.png"),
-        "comparaison_fractions":     os.path.join(ABS_PATH, "images/fr/19_comparaison_fractions.png"),
-        "multiplication_fractions":  os.path.join(ABS_PATH, "images/fr/33_multiplication_fractions.png"),
-        "division_fractions":        os.path.join(ABS_PATH, "images/fr/34_division_fractions.png"),
-        "fractions_denom_diff":      os.path.join(ABS_PATH, "images/fr/32_addition_fractions_denom_diff.png"),
-        "fraction_d_un_nombre":      os.path.join(ABS_PATH, "images/fr/31_fraction_d_un_nombre.png"),
-        "fractions_decimales":       os.path.join(ABS_PATH, "images/fr/37_fractions_decimales.png"),
-        # Concepts
-        "numeration":           os.path.join(ABS_PATH, "images/fr/10_numeration.png"),
-        "double_moitie":        os.path.join(ABS_PATH, "images/fr/28_double_et_moitie.png"),
-        "priorite_operations":  os.path.join(ABS_PATH, "images/fr/20_priorite_operations.png"),
-        "operations_mixtes":    os.path.join(ABS_PATH, "images/fr/25_operations_mixtes.png"),
-        "multiples_diviseurs":  os.path.join(ABS_PATH, "images/fr/30_multiples_diviseurs.png"),
+        # ── Addition ──────────────────────────────────────────────
+        "addition_simple":       _fr("26_addition_simple_visuelle.png"),   # 3+2=5
+        "addition_sans_retenue": _fr("01_addition_sans_retenue.png"),       # 23+14=37
+        "addition_avec_retenue": _fr("02_addition_avec_retenue.png"),       # 27+15=42
+        "addition_3_chiffres":   _fr("11_addition_3_chiffres.png"),         # 357+286=643
+        "addition_decimaux":     _fr("21_addition_decimaux.png"),           # 3,5+2,7=6,2
+        # ── Soustraction ──────────────────────────────────────────
+        "soustraction_simple":           _fr("27_soustraction_simple_visuelle.png"), # 5-2=3
+        "soustraction_sans_retenue":     _fr("03_soustraction_sans_retenue.png"),    # 48-23=25
+        "soustraction_2ch_1ch_emprunt":  _fr("04b_soustraction_2ch_1ch_emprunt.png"), # 13-7=6
+        "soustraction_avec_retenue":     _fr("04_soustraction_avec_retenue.png"),    # 43-17=26
+        "soustraction_3ch_1ch_emprunt":  _fr("04d_soustraction_3ch_1ch_emprunt.png"), # 124-8=116
+        "soustraction_3ch_2ch_emprunt":  _fr("04c_soustraction_3ch_2ch_emprunt.png"), # 132-47=85
+        "soustraction_3_chiffres":       _fr("12_soustraction_3_chiffres.png"),      # 503-247=256
+        "soustraction_double_emprunt":   _fr("38_soustraction_double_emprunt.png"),  # 834-567=267
+        "soustraction_decimaux":         _fr("22_soustraction_decimaux.png"),        # 15,3-8,7=6,6
+        # ── Multiplication ────────────────────────────────────────
+        "tables_2_5_9":              _fr("09_tables_multiplication_2_5_9.png"),  # tables 2,5,9
+        "tables_multiplication":     _fr("39_tables_multiplication.png"),        # tables 1→9
+        "tables_1_3_4":              _fr("40_tables_multiplication_1_3_4.png"),  # tables 1,3,4
+        "tables_6_7_8":              _fr("41_tables_multiplication_6_7_8.png"),  # tables 6,7,8
+        "multiplication_simple":     _fr("05_multiplication_simple.png"),        # 34×6=204
+        "multiplication_2_chiffres": _fr("06_multiplication_deux_chiffres.png"), # 24×13=312
+        "multiplication_3_chiffres": _fr("29_multiplication_3_chiffres.png"),    # 245×36=8820
+        "multiplication_10_100_1000":_fr("13_multiplication_10_100_1000.png"),   # 25×10=250
+        "multiplication_decimaux":   _fr("23_multiplication_decimaux.png"),      # 2,5×3=7,5
+        # ── Division ──────────────────────────────────────────────
+        "division_simple":           _fr("07_division_simple.png"),          # 84÷4=21
+        "division_avec_reste":       _fr("08_division_avec_reste.png"),      # 47÷5=9r2
+        "division_2_chiffres":       _fr("14_division_2_chiffres.png"),      # 156÷12=13
+        "division_decimale":         _fr("24_division_decimale.png"),        # 17÷4=4,25
+        "division_diviseur_decimal": _fr("36_division_diviseur_decimal.png"),# 8,4÷1,2=7
+        # ── Concepts ──────────────────────────────────────────────
+        "priorite_operations":  _fr("20_priorite_operations.png"),   # 2+3×4=14
+        "operations_mixtes":    _fr("25_operations_mixtes.png"),     # 8-3+2=7
+        "multiples_diviseurs":  _fr("30_multiples_diviseurs.png"),   # multiples de 3,5
     },
     "العربية": {
-        "addition_simple":       os.path.join(ABS_PATH, "images/ar/26_ar_addition_simple_visuelle.png"),
-        "addition_sans_retenue": os.path.join(ABS_PATH, "images/ar/01_ar_addition_sans_retenue.png"),
-        "addition_avec_retenue": os.path.join(ABS_PATH, "images/ar/02_ar_addition_avec_retenue.png"),
-        "addition_3_chiffres":   os.path.join(ABS_PATH, "images/ar/11_ar_addition_3_chiffres.png"),
-        "addition_decimaux":     os.path.join(ABS_PATH, "images/ar/21_ar_addition_decimaux.png"),
-        "soustraction_simple":         os.path.join(ABS_PATH, "images/ar/27_ar_soustraction_simple_visuelle.png"),
-        "soustraction_sans_retenue":   os.path.join(ABS_PATH, "images/ar/03_ar_soustraction_sans_retenue.png"),
-        "soustraction_avec_retenue":   os.path.join(ABS_PATH, "images/ar/04_ar_soustraction_avec_retenue.png"),
-        "soustraction_3_chiffres":     os.path.join(ABS_PATH, "images/ar/12_ar_soustraction_3_chiffres.png"),
-        "soustraction_double_emprunt": os.path.join(ABS_PATH, "images/ar/38_ar_soustraction_double_emprunt.png"),
-        "soustraction_decimaux":       os.path.join(ABS_PATH, "images/ar/22_ar_soustraction_decimaux.png"),
-        "multiplication_simple":       os.path.join(ABS_PATH, "images/ar/05_ar_multiplication_simple.png"),
-        "multiplication_2_chiffres":   os.path.join(ABS_PATH, "images/ar/06_ar_multiplication_deux_chiffres.png"),
-        "multiplication_3_chiffres":   os.path.join(ABS_PATH, "images/ar/29_ar_multiplication_3_chiffres.png"),
-        "multiplication_10_100_1000":  os.path.join(ABS_PATH, "images/ar/13_ar_multiplication_10_100_1000.png"),
-        "multiplication_decimaux":     os.path.join(ABS_PATH, "images/ar/23_ar_multiplication_decimaux.png"),
-        "tables_multiplication":       os.path.join(ABS_PATH, "images/ar/09_ar_tables_multiplication.png"),
-        "division_simple":           os.path.join(ABS_PATH, "images/ar/07_ar_division_simple.png"),
-        "division_avec_reste":       os.path.join(ABS_PATH, "images/ar/08_ar_division_avec_reste.png"),
-        "division_2_chiffres":       os.path.join(ABS_PATH, "images/ar/14_ar_division_2_chiffres.png"),
-        "division_decimale":         os.path.join(ABS_PATH, "images/ar/24_ar_division_decimale.png"),
-        "division_diviseur_decimal": os.path.join(ABS_PATH, "images/ar/36_ar_division_diviseur_decimal.png"),
-        "fractions_introduction":    os.path.join(ABS_PATH, "images/ar/15_ar_fractions_introduction.png"),
-        "fractions_equivalentes":    os.path.join(ABS_PATH, "images/ar/16_ar_fractions_equivalentes.png"),
-        "simplification_fractions":  os.path.join(ABS_PATH, "images/ar/35_ar_simplification_fractions.png"),
-        "addition_fractions":        os.path.join(ABS_PATH, "images/ar/17_ar_addition_fractions.png"),
-        "soustraction_fractions":    os.path.join(ABS_PATH, "images/ar/18_ar_soustraction_fractions.png"),
-        "comparaison_fractions":     os.path.join(ABS_PATH, "images/ar/19_ar_comparaison_fractions.png"),
-        "multiplication_fractions":  os.path.join(ABS_PATH, "images/ar/33_ar_multiplication_fractions.png"),
-        "division_fractions":        os.path.join(ABS_PATH, "images/ar/34_ar_division_fractions.png"),
-        "fractions_denom_diff":      os.path.join(ABS_PATH, "images/ar/32_ar_addition_fractions_denom_diff.png"),
-        "fraction_d_un_nombre":      os.path.join(ABS_PATH, "images/ar/31_ar_fraction_d_un_nombre.png"),
-        "fractions_decimales":       os.path.join(ABS_PATH, "images/ar/37_ar_fractions_decimales.png"),
-        "numeration":           os.path.join(ABS_PATH, "images/ar/10_ar_numeration.png"),
-        "double_moitie":        os.path.join(ABS_PATH, "images/ar/28_ar_double_et_moitie.png"),
-        "priorite_operations":  os.path.join(ABS_PATH, "images/ar/20_ar_priorite_operations.png"),
-        "operations_mixtes":    os.path.join(ABS_PATH, "images/ar/25_ar_operations_mixtes.png"),
-        "multiples_diviseurs":  os.path.join(ABS_PATH, "images/ar/30_ar_multiples_diviseurs.png"),
+        # Addition
+        "addition_simple":       _ar("26_ar_addition_simple_visuelle.png"),
+        "addition_sans_retenue": _ar("01_ar_addition_sans_retenue.png"),
+        "addition_avec_retenue": _ar("02_ar_addition_avec_retenue.png"),
+        "addition_3_chiffres":   _ar("11_ar_addition_3_chiffres.png"),
+        "addition_decimaux":     _ar("21_ar_addition_decimaux.png"),
+        # Soustraction
+        "soustraction_simple":           _ar("27_ar_soustraction_simple_visuelle.png"),
+        "soustraction_sans_retenue":     _ar("03_ar_soustraction_sans_retenue.png"),
+        "soustraction_2ch_1ch_emprunt":  _ar("04b_ar_soustraction_2ch_1ch_emprunt.png"),
+        "soustraction_avec_retenue":     _ar("04_ar_soustraction_avec_retenue.png"),
+        "soustraction_3ch_1ch_emprunt":  _ar("04d_ar_soustraction_3ch_1ch_emprunt.png"),
+        "soustraction_3ch_2ch_emprunt":  _ar("04c_ar_soustraction_3ch_2ch_emprunt.png"),
+        "soustraction_3_chiffres":       _ar("12_ar_soustraction_3_chiffres.png"),
+        "soustraction_double_emprunt":   _ar("38_ar_soustraction_double_emprunt.png"),
+        "soustraction_decimaux":         _ar("22_ar_soustraction_decimaux.png"),
+        # ── Multiplication ────────────────────────────────────────
+        "tables_2_5_9":              _ar("09_ar_tables_multiplication_2_5_9.png"),
+        "tables_multiplication":     _ar("39_ar_tables_multiplication.png"),
+        "tables_1_3_4":              _ar("40_ar_tables_multiplication_1_3_4.png"),
+        "tables_6_7_8":              _ar("41_ar_tables_multiplication_6_7_8.png"),
+        "multiplication_simple":     _ar("05_ar_multiplication_simple.png"),
+        "multiplication_2_chiffres": _ar("06_ar_multiplication_deux_chiffres.png"),
+        "multiplication_3_chiffres": _ar("29_ar_multiplication_3_chiffres.png"),
+        "multiplication_10_100_1000":_ar("13_ar_multiplication_10_100_1000.png"),
+        "multiplication_decimaux":   _ar("23_ar_multiplication_decimaux.png"),
+        # ── Division ──────────────────────────────────────────────
+        "division_simple":           _ar("07_ar_division_simple.png"),
+        "division_avec_reste":       _ar("08_ar_division_avec_reste.png"),
+        "division_2_chiffres":       _ar("14_ar_division_2_chiffres.png"),
+        "division_decimale":         _ar("24_ar_division_decimale.png"),
+        "division_diviseur_decimal": _ar("36_ar_division_diviseur_decimal.png"),
+        # ── Concepts ──────────────────────────────────────────────
+        "priorite_operations":  _ar("20_ar_priorite_operations.png"),
+        "operations_mixtes":    _ar("25_ar_operations_mixtes.png"),
+        "multiples_diviseurs":  _ar("30_ar_multiples_diviseurs.png"),
     }
 }
+# Fallback : si image AR introuvable → image FR utilisée automatiquement
+for k, v in IMAGES_MAP["Français"].items():
+    ar_path = IMAGES_MAP["العربية"].get(k)
+    if not ar_path or not os.path.exists(ar_path):
+        IMAGES_MAP["العربية"][k] = v
 
 
 # ============================================================
@@ -1133,91 +1230,87 @@ CHOIX_OPERATIONS = {
     "addition": {
         1: [
             {"label_fr": "Addition simple (5 + 3)", "label_ar": "جمع بسيط (5 + 3)", "image": "addition_simple",
-             "consigne": "addition simple à 1 chiffre, nombres inférieurs à 10"},
+             "consigne": "addition simple à 1 chiffre, nombres entre 2 et 9"},
         ],
         2: [
             {"label_fr": "Addition sans retenue (23 + 14)", "label_ar": "جمع بدون احتفاظ (23 + 14)", "image": "addition_sans_retenue",
-             "consigne": "addition à 2 chiffres SANS retenue"},
+             "consigne": "addition à 2 chiffres SANS retenue, nombres entre 10 et 49"},
             {"label_fr": "Addition avec retenue (27 + 35)", "label_ar": "جمع مع الاحتفاظ (27 + 35)", "image": "addition_avec_retenue",
-             "consigne": "addition à 2 chiffres AVEC retenue"},
+             "consigne": "addition à 2 chiffres AVEC retenue, nombres entre 15 et 89"},
         ],
         3: [
             {"label_fr": "Addition sans retenue (23 + 14)", "label_ar": "جمع بدون احتفاظ (23 + 14)", "image": "addition_sans_retenue",
-             "consigne": "addition à 2 chiffres SANS retenue"},
+             "consigne": "addition à 2 chiffres SANS retenue, nombres entre 10 et 49"},
             {"label_fr": "Addition avec retenue (27 + 35)", "label_ar": "جمع مع الاحتفاظ (27 + 35)", "image": "addition_avec_retenue",
-             "consigne": "addition à 2 chiffres AVEC retenue"},
+             "consigne": "addition à 2 chiffres AVEC retenue, nombres entre 15 et 89"},
             {"label_fr": "Addition à 3 chiffres (357 + 286)", "label_ar": "جمع بثلاثة أرقام (357 + 286)", "image": "addition_3_chiffres",
              "consigne": "addition à 3 chiffres avec retenues, nombres entre 100 et 999"},
         ],
         4: [
             {"label_fr": "Addition avec retenue (27 + 35)", "label_ar": "جمع مع الاحتفاظ (27 + 35)", "image": "addition_avec_retenue",
-             "consigne": "addition à 2 chiffres AVEC retenue"},
+             "consigne": "addition à 2 chiffres AVEC retenue, nombres entre 15 et 89"},
             {"label_fr": "Addition à 3 chiffres (357 + 286)", "label_ar": "جمع بثلاثة أرقام (357 + 286)", "image": "addition_3_chiffres",
              "consigne": "addition à 3 chiffres avec retenues"},
-            {"label_fr": "Addition de décimaux (12,5 + 3,45)", "label_ar": "جمع الأعداد العشرية (12,5 + 3,45)", "image": "addition_decimaux",
-             "consigne": "addition de nombres décimaux, aligner les virgules"},
         ],
         5: [
             {"label_fr": "Addition à 3 chiffres (357 + 286)", "label_ar": "جمع بثلاثة أرقام (357 + 286)", "image": "addition_3_chiffres",
              "consigne": "addition à 3 chiffres avec retenues"},
-            {"label_fr": "Addition de décimaux (12,5 + 3,45)", "label_ar": "جمع الأعداد العشرية (12,5 + 3,45)", "image": "addition_decimaux",
-             "consigne": "addition de nombres décimaux"},
-            {"label_fr": "Addition de fractions (1/4 + 2/4)", "label_ar": "جمع الكسور (1/4 + 2/4)", "image": "addition_fractions",
-             "consigne": "addition de fractions avec MÊME dénominateur"},
         ],
         6: [
-            {"label_fr": "Addition de décimaux (12,5 + 3,45)", "label_ar": "جمع الأعداد العشرية (12,5 + 3,45)", "image": "addition_decimaux",
-             "consigne": "addition de nombres décimaux"},
-            {"label_fr": "Addition de fractions (1/4 + 2/4)", "label_ar": "جمع الكسور (1/4 + 2/4)", "image": "addition_fractions",
-             "consigne": "addition de fractions même dénominateur"},
-            {"label_fr": "Fractions dénominateurs différents (1/2 + 1/3)", "label_ar": "كسور بمقامات مختلفة (1/2 + 1/3)", "image": "fractions_denom_diff",
-             "consigne": "addition de fractions avec dénominateurs DIFFÉRENTS, trouver le PPCM"},
+            {"label_fr": "Addition à 3 chiffres (357 + 286)", "label_ar": "جمع بثلاثة أرقام (357 + 286)", "image": "addition_3_chiffres",
+             "consigne": "addition à 3 chiffres avec retenues, nombres entre 100 et 999"},
+            {"label_fr": "Addition avec retenue (27 + 35)", "label_ar": "جمع مع الاحتفاظ (27 + 35)", "image": "addition_avec_retenue",
+             "consigne": "addition à 2 chiffres AVEC retenue, nombres entre 15 et 89"},
         ],
     },
     "soustraction": {
         1: [
             {"label_fr": "Soustraction simple (7 - 3)", "label_ar": "طرح بسيط (7 - 3)", "image": "soustraction_simple",
-             "consigne": "soustraction simple à 1 chiffre, nombres inférieurs à 10"},
+             "consigne": "soustraction simple à 1 chiffre, nombres entre 2 et 9, le premier PLUS GRAND que le deuxième"},
         ],
         2: [
             {"label_fr": "Soustraction sans emprunt (48 - 23)", "label_ar": "طرح بدون استلاف (48 - 23)", "image": "soustraction_sans_retenue",
-             "consigne": "soustraction à 2 chiffres SANS emprunt"},
+             "consigne": "soustraction à 2 chiffres SANS emprunt, nombres entre 20 et 89, le premier PLUS GRAND que le deuxième"},
             {"label_fr": "Soustraction avec emprunt (43 - 17)", "label_ar": "طرح مع الاستلاف (43 - 17)", "image": "soustraction_avec_retenue",
-             "consigne": "soustraction à 2 chiffres AVEC emprunt"},
+             "consigne": "soustraction à 2 chiffres AVEC emprunt, nombres entre 20 et 89, le premier PLUS GRAND que le deuxième"},
         ],
         3: [
             {"label_fr": "Soustraction avec emprunt (43 - 17)", "label_ar": "طرح مع الاستلاف (43 - 17)", "image": "soustraction_avec_retenue",
-             "consigne": "soustraction à 2 chiffres avec emprunt"},
+             "consigne": "soustraction à 2 chiffres AVEC emprunt, nombres entre 20 et 89, le premier PLUS GRAND que le deuxième"},
             {"label_fr": "Soustraction à 3 chiffres (834 - 567)", "label_ar": "طرح بثلاثة أرقام (834 - 567)", "image": "soustraction_double_emprunt",
              "consigne": "soustraction à 3 chiffres avec double emprunt, nombres entre 100 et 999"},
         ],
         4: [
             {"label_fr": "Soustraction à 3 chiffres (503 - 247)", "label_ar": "طرح بثلاثة أرقام (503 - 247)", "image": "soustraction_3_chiffres",
              "consigne": "soustraction à 3 chiffres avec emprunts"},
-            {"label_fr": "Soustraction de décimaux (15,3 - 8,7)", "label_ar": "طرح الأعداد العشرية (15,3 - 8,7)", "image": "soustraction_decimaux",
-             "consigne": "soustraction de nombres décimaux"},
+            {"label_fr": "Soustraction avec emprunt (72 - 48)", "label_ar": "طرح مع الاستلاف (72 - 48)", "image": "soustraction_avec_retenue",
+             "consigne": "soustraction à 2 chiffres AVEC emprunt, nombres entre 20 et 89, le premier PLUS GRAND que le deuxième"},
+            {"label_fr": "Soustraction à 3 chiffres (503 - 247)", "label_ar": "طرح بثلاثة أرقام (503 - 247)", "image": "soustraction_3_chiffres",
+             "consigne": "soustraction à 3 chiffres avec emprunts"},
         ],
         5: [
-            {"label_fr": "Soustraction de décimaux (15,3 - 8,7)", "label_ar": "طرح الأعداد العشرية (15,3 - 8,7)", "image": "soustraction_decimaux",
-             "consigne": "soustraction de nombres décimaux"},
-            {"label_fr": "Soustraction de fractions (5/7 - 2/7)", "label_ar": "طرح الكسور (5/7 - 2/7)", "image": "soustraction_fractions",
-             "consigne": "soustraction de fractions même dénominateur"},
+            {"label_fr": "Soustraction à 3 chiffres (503 - 247)", "label_ar": "طرح بثلاثة أرقام (503 - 247)", "image": "soustraction_3_chiffres",
+             "consigne": "soustraction à 3 chiffres avec emprunts, nombres entre 100 et 999"},
+            {"label_fr": "Soustraction avec double emprunt (400 - 156)", "label_ar": "طرح مع استلاف مزدوج (400 - 156)", "image": "soustraction_double_emprunt",
+             "consigne": "soustraction à 3 chiffres avec double emprunt, nombres entre 100 et 999"},
         ],
         6: [
-            {"label_fr": "Soustraction de décimaux (15,3 - 8,7)", "label_ar": "طرح الأعداد العشرية (15,3 - 8,7)", "image": "soustraction_decimaux",
-             "consigne": "soustraction de nombres décimaux"},
-            {"label_fr": "Soustraction de fractions (5/7 - 2/7)", "label_ar": "طرح الكسور (5/7 - 2/7)", "image": "soustraction_fractions",
-             "consigne": "soustraction de fractions même dénominateur"},
+            {"label_fr": "Soustraction à 3 chiffres (503 - 247)", "label_ar": "طرح بثلاثة أرقام (503 - 247)", "image": "soustraction_3_chiffres",
+             "consigne": "soustraction à 3 chiffres avec emprunts, nombres entre 100 et 999"},
+            {"label_fr": "Soustraction avec double emprunt (400 - 156)", "label_ar": "طرح مع استلاف مزدوج (400 - 156)", "image": "soustraction_double_emprunt",
+             "consigne": "soustraction à 3 chiffres avec double emprunt, nombres entre 100 et 999"},
         ],
     },
     "multiplication": {
         2: [
-            {"label_fr": "Tables de multiplication (2, 5, 9)", "label_ar": "جداول الضرب (2, 5, 9)", "image": "tables_multiplication",
-             "consigne": "tables de multiplication, produit simple"},
+            {"label_fr": "Les 9 tables de multiplication (1 à 9)", "label_ar": "جداول الضرب التسعة (1 إلى 9)", "image": "tables_multiplication",
+             "consigne": "tables de multiplication de 1 à 9, produit simple entre 1×1 et 9×10"},
+            {"label_fr": "Multiplication simple (3 × 4)", "label_ar": "الضرب البسيط (3 × 4)", "image": "addition_simple",
+             "consigne": "multiplication simple 1 chiffre × 1 chiffre, nombres entre 2 et 9, résultat ≤ 50"},
         ],
         3: [
-            {"label_fr": "Tables de multiplication", "label_ar": "جداول الضرب", "image": "tables_multiplication",
-             "consigne": "tables de multiplication"},
+            {"label_fr": "Les 9 tables de multiplication", "label_ar": "جداول الضرب التسعة", "image": "tables_multiplication",
+             "consigne": "tables de multiplication de 1 à 9"},
             {"label_fr": "Multiplication par un chiffre (34 × 6)", "label_ar": "الضرب بعدد واحد (34 × 6)", "image": "multiplication_simple",
              "consigne": "multiplication 2 chiffres × 1 chiffre avec retenue"},
             {"label_fr": "Multiplier par 10, 100, 1000", "label_ar": "الضرب في 10, 100, 1000", "image": "multiplication_10_100_1000",
@@ -1232,16 +1325,12 @@ CHOIX_OPERATIONS = {
         5: [
             {"label_fr": "Multiplication à 2 chiffres (24 × 13)", "label_ar": "الضرب بعددين (24 × 13)", "image": "multiplication_2_chiffres",
              "consigne": "multiplication 2 chiffres × 2 chiffres"},
-            {"label_fr": "Multiplication de décimaux (2,5 × 3)", "label_ar": "ضرب الأعداد العشرية (2,5 × 3)", "image": "multiplication_decimaux",
-             "consigne": "multiplication de nombres décimaux"},
-            {"label_fr": "Multiplication de fractions (2/3 × 3/4)", "label_ar": "ضرب الكسور (2/3 × 3/4)", "image": "multiplication_fractions",
-             "consigne": "multiplication de fractions"},
         ],
         6: [
-            {"label_fr": "Multiplication de décimaux (2,5 × 3)", "label_ar": "ضرب الأعداد العشرية (2,5 × 3)", "image": "multiplication_decimaux",
-             "consigne": "multiplication de nombres décimaux"},
-            {"label_fr": "Multiplication de fractions (2/3 × 3/4)", "label_ar": "ضرب الكسور (2/3 × 3/4)", "image": "multiplication_fractions",
-             "consigne": "multiplication de fractions"},
+            {"label_fr": "Multiplication à 2 chiffres (24 × 13)", "label_ar": "الضرب بعددين (24 × 13)", "image": "multiplication_2_chiffres",
+             "consigne": "multiplication 2 chiffres × 2 chiffres, deux lignes + addition"},
+            {"label_fr": "Priorité des opérations (2 + 3 × 4)", "label_ar": "أولوية العمليات (2 + 3 × 4)", "image": "priorite_operations",
+             "consigne": "priorité des opérations, × et ÷ avant + et -"},
             {"label_fr": "Priorité des opérations (2 + 3 × 4)", "label_ar": "أولوية العمليات (2 + 3 × 4)", "image": "priorite_operations",
              "consigne": "priorité des opérations, × et ÷ avant + et -"},
         ],
@@ -1262,71 +1351,346 @@ CHOIX_OPERATIONS = {
         5: [
             {"label_fr": "Division par 2 chiffres (156 ÷ 12)", "label_ar": "قسمة بعددين (156 ÷ 12)", "image": "division_2_chiffres",
              "consigne": "division diviseur 2 chiffres"},
-            {"label_fr": "Division décimale (17 ÷ 4 = 4,25)", "label_ar": "القسمة العشرية (17 ÷ 4 = 4,25)", "image": "division_decimale",
-             "consigne": "division avec quotient décimal"},
         ],
         6: [
-            {"label_fr": "Division décimale (17 ÷ 4 = 4,25)", "label_ar": "القسمة العشرية (17 ÷ 4 = 4,25)", "image": "division_decimale",
-             "consigne": "division décimale"},
-            {"label_fr": "Diviseur décimal (8,4 ÷ 1,2)", "label_ar": "المقسوم عليه عشري (8,4 ÷ 1,2)", "image": "division_diviseur_decimal",
-             "consigne": "division avec diviseur décimal, multiplier les deux par 10"},
-            {"label_fr": "Division de fractions (1/2 ÷ 1/4)", "label_ar": "قسمة الكسور (1/2 ÷ 1/4)", "image": "division_fractions",
-             "consigne": "division de fractions, inverser et multiplier"},
+
+            {"label_fr": "Division par 2 chiffres (156 ÷ 12)", "label_ar": "قسمة بعددين (156 ÷ 12)", "image": "division_2_chiffres",
+             "consigne": "division diviseur 2 chiffres"},
+            {"label_fr": "Division avec reste (47 ÷ 5)", "label_ar": "قسمة مع الباقي (47 ÷ 5)", "image": "division_avec_reste",
+             "consigne": "division avec reste, diviseur 1 chiffre"},
         ],
     },
-    "fractions": {
-        3: [
-            {"label_fr": "Découverte des fractions (1/2, 1/4, 3/4)", "label_ar": "اكتشاف الكسور (1/2, 1/4, 3/4)", "image": "fractions_introduction",
-             "consigne": "lecture de fractions, numérateur et dénominateur"},
-        ],
-        4: [
-            {"label_fr": "Découverte des fractions", "label_ar": "اكتشاف الكسور", "image": "fractions_introduction",
-             "consigne": "lecture de fractions"},
-            {"label_fr": "Fractions équivalentes (1/2 = 2/4)", "label_ar": "الكسور المتكافئة (1/2 = 2/4)", "image": "fractions_equivalentes",
-             "consigne": "fractions équivalentes, multiplier haut et bas par le même nombre"},
-            {"label_fr": "Simplifier une fraction (6/8 = 3/4)", "label_ar": "تبسيط كسر (6/8 = 3/4)", "image": "simplification_fractions",
-             "consigne": "simplification de fractions avec le PGCD"},
-            {"label_fr": "Comparer des fractions", "label_ar": "مقارنة الكسور", "image": "comparaison_fractions",
-             "consigne": "comparaison de fractions"},
-        ],
-        5: [
-            {"label_fr": "Fractions équivalentes (1/2 = 2/4)", "label_ar": "الكسور المتكافئة (1/2 = 2/4)", "image": "fractions_equivalentes",
-             "consigne": "fractions équivalentes"},
-            {"label_fr": "Addition de fractions (1/5 + 2/5)", "label_ar": "جمع الكسور (1/5 + 2/5)", "image": "addition_fractions",
-             "consigne": "addition de fractions même dénominateur"},
-            {"label_fr": "Soustraction de fractions (5/7 - 2/7)", "label_ar": "طرح الكسور (5/7 - 2/7)", "image": "soustraction_fractions",
-             "consigne": "soustraction de fractions même dénominateur"},
-            {"label_fr": "Fractions décimales (1/4 = 0,25)", "label_ar": "الكسور العشرية (1/4 = 0,25)", "image": "fractions_decimales",
-             "consigne": "conversion fraction ↔ décimal"},
-        ],
-        6: [
-            {"label_fr": "Addition fractions dénominateurs différents (1/2 + 1/3)", "label_ar": "جمع كسور بمقامات مختلفة (1/2 + 1/3)", "image": "fractions_denom_diff",
-             "consigne": "addition fractions dénominateurs différents, PPCM"},
-            {"label_fr": "Multiplication de fractions (2/3 × 3/4)", "label_ar": "ضرب الكسور (2/3 × 3/4)", "image": "multiplication_fractions",
-             "consigne": "multiplication de fractions"},
-            {"label_fr": "Division de fractions (1/2 ÷ 1/4)", "label_ar": "قسمة الكسور (1/2 ÷ 1/4)", "image": "division_fractions",
-             "consigne": "division de fractions, inverser et multiplier"},
-            {"label_fr": "Fraction d'un nombre (1/4 de 20)", "label_ar": "كسر من عدد (1/4 من 20)", "image": "fraction_d_un_nombre",
-             "consigne": "prendre une fraction d'un nombre entier"},
-        ],
-    },
+
 }
-
-
 def detecter_operation_demandee(message):
-    """Détecte quelle opération l'élève demande. Retourne le nom ou None."""
-    msg = (message or "").lower()
-    if any(mot in msg for mot in ["addition", "ajouter", "additionner", "الجمع"]):
+    """
+    Détecte quelle opération l'élève demande via GPT (few-shot).
+    GPT comprend le langage naturel, les fautes, les synonymes, l'arabe.
+    Fallback rapide par mots-clés si GPT échoue.
+    """
+    msg = (message or "").strip()
+    if not msg or len(msg) < 3:
+        return None
+
+    # ── Appel GPT classifier avec exemples (few-shot) ──
+    try:
+        classification_prompt = (
+            "Tu dois identifier l'opération mathématique dans le message d'un élève de primaire.\n\n"
+            "Exemples :\n"
+            '"partager 45 bonbons entre 7 enfants" → division\n'
+            '"59 cahiers pour 8 professeurs équitablement" → division\n'
+            '"répartir 30 stylos entre 5 élèves" → division\n'
+            '"3 groupes de 4 pommes, combien en tout" → multiplication\n'
+            '"chaque élève a 6 livres et il y a 9 élèves" → multiplication\n'
+            '"j ai 15 billes, j en perds 7, combien il reste" → soustraction\n'
+            '"on avait 23 filles et 7 sont parties" → soustraction\n'
+            '"j ai 5 billes, j en gagne 8, combien en tout" → addition\n'
+            '"mettre 12 pommes avec 8 autres" → addition\n'
+            '"c est quoi une fraction" → fractions\n'
+            '"la géographie du maroc" → autre\n'
+            '"le foot c est cool" → autre\n\n'
+            f'Message de l\'élève : "{msg}"\n\n'
+            "Réponds avec UN seul mot parmi : "
+            "addition, soustraction, multiplication, division, fractions, autre"
+        )
+        result = llm_classifier.invoke([HumanMessage(content=classification_prompt)])
+        op = result.content.strip().lower().split()[0].rstrip('.,!?')
+        if op in ["addition", "soustraction", "multiplication", "division", "fractions"]:
+            return op
+        if op == "autre":
+            return None
+    except Exception:
+        pass
+
+    # ── Fallback mots-clés (si GPT indisponible) ──
+    m = msg.lower()
+    if any(x in m for x in ["addition","ajouter","additionner","الجمع"]):
         return "addition"
-    if any(mot in msg for mot in ["soustraction", "soustraire", "enlever", "الطرح"]):
+    if any(x in m for x in ["soustraction","soustraire","enlever","الطرح"]):
         return "soustraction"
-    if any(mot in msg for mot in ["multiplication", "multiplie", "fois", "table", "الضرب", "جدول"]):
+    if any(x in m for x in ["multiplication","multiplie","fois","table","الضرب"]):
         return "multiplication"
-    if any(mot in msg for mot in ["division", "divise", "partage", "القسمة"]):
+    if any(x in m for x in ["division","divise","diviser","partage","partitionner",
+                              "répartir","distribuer","entre","القسمة"]):
         return "division"
-    if any(mot in msg for mot in ["fraction", "كسر", "كسور", "moitié", "quart"]):
+    if any(x in m for x in ["fraction","moitié","quart","كسر"]):
         return "fractions"
     return None
+
+
+def detecter_calcul_direct(message):
+    """
+    Détecte si l'élève a écrit un calcul direct.
+    Règle pour "/" :
+      - numérateur < dénominateur (ex: 1/2, 3/4) → fraction → retourne None (pas traité comme calcul)
+      - numérateur ≥ dénominateur (ex: 13/8, 15/3) → division → traité comme ÷
+    """
+    m = (message or "").strip()
+    m_norm = m.replace('×','*').replace('÷','/').replace('−','-')
+
+    match = re.fullmatch(
+        r'(\d+(?:[,\.]\d+)?)\s*([+\-×*x÷/])\s*(\d+(?:[,\.]\d+)?)', m
+    )
+    if not match:
+        match = re.fullmatch(
+            r'(\d+(?:[,\.]\d+)?)\s*([+\-*/])\s*(\d+(?:[,\.]\d+)?)', m_norm
+        )
+    if not match:
+        return None
+
+    a   = match.group(1).replace(',', '.')
+    op  = match.group(2)
+    b   = match.group(3).replace(',', '.')
+
+    # Règle fraction vs division pour "/"
+    if op == '/':
+        try:
+            fa, fb = float(a), float(b)
+            if fa < fb:
+                # numérateur < dénominateur → c'est une fraction → ne pas traiter
+                return None
+        except Exception:
+            pass
+
+    # Normaliser l'affichage et l'opérateur
+    expr_display = m.replace('/', ' ÷ ').replace('*', ' × ')
+    op_norm = '÷' if op == '/' else ('×' if op in ['*','x'] else op)
+
+    return (expr_display.strip(), float(a), op_norm, float(b))
+
+
+def extraire_calcul_dans_phrase(message):
+    """
+    Détecte si le message est une demande d'explication pour un calcul embarqué.
+    LLM gère toutes les formulations : "montre moi", "fais moi", "résoudre moi",
+    "je comprends pas", "aide moi à faire 24-17", etc.
+    """
+    # Étape 1 : vérifier qu'il y a un calcul dans le message
+    match = re.search(
+        r'(\d+(?:[,\.]\d+)?)\s*([+\-−×*x÷/])\s*(\d+(?:[,\.]\d+)?)',
+        message
+    )
+    if not match:
+        return None  # pas de calcul → rien à faire
+
+    # Étape 2 : LLM vérifie si c'est une demande d'explication
+    try:
+        prompt = (
+            f'Un élève de primaire a écrit : "{message}"\n'
+            f'Est-ce qu\'il demande de l\'aide pour comprendre ou résoudre un calcul ?\n'
+            f'Réponds UNIQUEMENT par : oui / non'
+        )
+        result = llm_classifier.invoke([HumanMessage(content=prompt)])
+        if "oui" not in result.content.strip().lower():
+            return None
+    except Exception:
+        # Fallback mots-clés si LLM indisponible
+        mots = ["montre","affiche","comment","explique","aide","fais","résoudre",
+                "résous","calcule","ارني","كيف","أرني","وضّح","افعل","حل","ساعد"]
+        if not any(m in message.lower() for m in mots):
+            return None
+
+    # Étape 3 : extraire et normaliser le calcul
+    a  = match.group(1).replace(',', '.')
+    op = match.group(2)
+    b  = match.group(3).replace(',', '.')
+
+    if op == '/':
+        try:
+            if float(a) < float(b):
+                return None
+        except Exception:
+            pass
+
+    expr_display = f"{match.group(1)} {op} {match.group(3)}"
+    op_norm = (
+        '÷' if op in ['/', '÷'] else
+        '×' if op in ['*', 'x', '×'] else
+        '-' if op == '−' else op
+    )
+    return (expr_display.strip(), float(a), op_norm, float(b))
+
+
+def get_image_for_calcul(a, op, b, niveau):
+    """
+    Détermine l'image + consigne pour un calcul direct a op b.
+    La consigne inclut l'exemple RÉEL de l'image pour que GPT
+    explique avec les mêmes chiffres que l'image.
+    """
+    imgs = IMAGES_MAP.get("Français")
+    ia, ib = int(a), int(b)
+    nb_ch_a = len(str(ia))
+    nb_ch_b = len(str(ib))
+    is_decimal = (a != int(a)) or (b != int(b))
+
+    # ── ADDITION ──
+    if op in ['+']:
+        u_a = ia % 10; u_b = ib % 10
+        has_carry = (u_a + u_b) >= 10
+        if is_decimal:
+            return imgs.get("addition_3_chiffres"), "addition à 3 chiffres"
+        if nb_ch_a >= 3 or nb_ch_b >= 3:
+            return imgs.get("addition_3_chiffres"),  "addition 3 chiffres, exemple image : 357 + 286 = 643"
+        if nb_ch_a <= 1 and nb_ch_b <= 1:
+            return imgs.get("addition_simple"),      "addition simple, exemple image : 5 + 3 = 8"
+        if has_carry:
+            return imgs.get("addition_avec_retenue"),"addition avec retenue, exemple image : 27 + 15 = 42"
+        return     imgs.get("addition_sans_retenue"),"addition sans retenue, exemple image : 23 + 14 = 37"
+
+    # ── SOUSTRACTION ──
+    if op in ['-', '−']:
+        if is_decimal:
+            return imgs.get("soustraction_3_chiffres"), "soustraction à 3 chiffres"
+        u_a = ia % 10; u_b = ib % 10
+        needs_borrow = u_a < u_b
+        if nb_ch_a >= 3 and nb_ch_b >= 3:
+            return imgs.get("soustraction_3_chiffres"),       "soustraction 3ch−3ch, exemple image : 503 − 247 = 256"
+        if nb_ch_a >= 3 and nb_ch_b == 2:
+            if needs_borrow:
+                return imgs.get("soustraction_3ch_2ch_emprunt"),"soustraction 3ch−2ch avec emprunt, exemple image : 132 − 47 = 85"
+            return imgs.get("soustraction_3_chiffres"),       "soustraction 3ch, exemple image : 503 − 247 = 256"
+        if nb_ch_a >= 3 and nb_ch_b == 1:
+            if needs_borrow:
+                return imgs.get("soustraction_3ch_1ch_emprunt"),"soustraction 3ch−1ch avec emprunt, exemple image : 124 − 8 = 116"
+            return imgs.get("soustraction_sans_retenue"),     "soustraction sans emprunt, exemple image : 48 − 23 = 25"
+        if nb_ch_a == 2 and nb_ch_b == 2:
+            if needs_borrow:
+                return imgs.get("soustraction_avec_retenue"), "soustraction 2ch avec emprunt, exemple image : 43 − 17 = 26"
+            return imgs.get("soustraction_sans_retenue"),     "soustraction sans emprunt, exemple image : 48 − 23 = 25"
+        if nb_ch_a == 2 and nb_ch_b == 1:
+            if needs_borrow:
+                return imgs.get("soustraction_2ch_1ch_emprunt"),"soustraction 2ch−1ch avec emprunt, exemple image : 13 − 7 = 6"
+            return imgs.get("soustraction_simple"),           "soustraction simple, exemple image : 7 − 3 = 4"
+        return     imgs.get("soustraction_simple"),           "soustraction simple, exemple image : 7 − 3 = 4"
+
+    # ── MULTIPLICATION ──
+    if op in ['×', '*', 'x']:
+        if is_decimal:
+            return imgs.get("multiplication_2_chiffres"), "multiplication 2 chiffres × 2 chiffres"
+        if nb_ch_a >= 3 or nb_ch_b >= 3:
+            return imgs.get("multiplication_3_chiffres"), "multiplication 3 chiffres, exemple image : 245 × 36 = 8820"
+        if nb_ch_a == 2 and nb_ch_b == 2:
+            return imgs.get("multiplication_2_chiffres"), "multiplication 2ch×2ch, exemple image : 24 × 13 = 312"
+        if nb_ch_a == 2 or nb_ch_b == 2:
+            return imgs.get("multiplication_simple"),     "multiplication 2ch×1ch, exemple image : 34 × 6 = 204"
+        return     imgs.get("tables_multiplication"),     "tables de multiplication, exemple image : 3 × 4 = 12"
+
+    # ── DIVISION ──
+    if op in ['÷', '/']:
+        # Convertir niveau en entier (CE2 → 2, CE5 → 5...)
+        try:
+            nb = int(str(niveau).replace("CE","").strip())
+        except Exception:
+            nb = 3  # défaut CE3
+        # Diviseur 2 chiffres
+        if nb_ch_b == 2:
+            return imgs.get("division_2_chiffres"),       "division diviseur 2ch, exemple image : 156 ÷ 12 = 13"
+        # CE3-CE4 : quotient entier — vérifier s'il y a un reste
+        if ia % ib != 0:
+            return imgs.get("division_avec_reste"),       "division avec reste, exemple image : 47 ÷ 5 = 9 reste 2"
+        return     imgs.get("division_simple"),           "division simple, exemple image : 84 ÷ 4 = 21"
+
+    return None, None
+
+
+def extraire_calcul_depuis_probleme(message, operation):
+    """
+    Extrait le bon calcul d'un problème énoncé via GPT (llm_classifier).
+    Ex: "17 pommes pour 9 amis" + "division" → "17 ÷ 9"
+    Plus précis que la regex qui prenait les 2 premiers nombres sans comprendre le sens.
+    """
+    if not message or not operation:
+        return None
+
+    symboles = {
+        "addition":       "+",
+        "soustraction":   "−",
+        "multiplication": "×",
+        "division":       "÷",
+    }
+    signe = symboles.get(operation, "?")
+
+    try:
+        prompt = (
+            f"Dans ce problème de {operation}, quel est le calcul à effectuer ?\n"
+            f"Problème : \"{message}\"\n\n"
+            f"Réponds UNIQUEMENT avec l'expression mathématique, par exemple : '17 {signe} 9'\n"
+            f"Rien d'autre que l'expression."
+        )
+        result = llm_classifier.invoke([HumanMessage(content=prompt)])
+        expr = result.content.strip()
+        # Nettoyer la réponse
+        expr = expr.replace('*', '×').replace('/', '÷').replace('-', '−')
+        # Vérifier que c'est une expression valide (contient des chiffres et un opérateur)
+        if any(c.isdigit() for c in expr) and any(op in expr for op in ['+','−','×','÷']):
+            return expr
+    except Exception:
+        pass
+
+    # Fallback regex : prendre les nombres les plus pertinents
+    import re
+    nombres = re.findall(r'\d+(?:[,\.]\d+)?', message)
+    if len(nombres) >= 2:
+        # Pour division/soustraction : le plus grand divisé par le dernier
+        if operation in ["division", "soustraction"]:
+            a = max(nombres, key=lambda x: float(x.replace(',', '.')))
+            nombres_sans_a = [n for n in nombres if n != a]
+            b = nombres_sans_a[-1] if nombres_sans_a else nombres[-1]
+        else:
+            a, b = nombres[0], nombres[-1]
+        signe_map = {
+            "addition": "+", "soustraction": "−",
+            "multiplication": "×", "division": "÷"
+        }
+        return f"{a} {signe_map.get(operation, '?')} {b}"
+    return None
+
+
+def detecter_probleme_enonce(message):
+    """
+    Détecte si le message de l'élève est un problème énoncé à résoudre
+    (pas un simple calcul posé).
+    Retourne True si c'est un problème, False sinon.
+    """
+    msg = (message or "").lower()
+
+    # Indicateurs d'un problème énoncé
+    mots_probleme_fr = [
+        # Prénoms courants
+        "ali", "karim", "sara", "fatima", "ahmed", "mounaim", "youssef", "dina",
+        # Verbes contextuels
+        "il a", "elle a", "il y a", "combien", "quel est", "quelle est",
+        "au total", "en tout", "restent", "reste-t-il", "manque",
+        "achète", "vend", "donne", "reçoit", "partage", "partager",
+        "partitionner", "répartir", "distribuer", "séparer",
+        "entre", "chacun", "par personne", "par enfant",
+        # Objets et unités
+        "paquets", "sacs", "boîtes", "kilos", "kg", "grammes", "litres", "mètres",
+        "élèves", "enfants", "pommes", "bonbons", "oranges", "personnes",
+        "chaque", "par jour", "par semaine",
+        # Demandes
+        "problème", "résous", "calcule", "trouve", "comment faire", "comment partager",
+        "je veux", "aide-moi", "comment calculer",
+    ]
+    mots_probleme_ar = [
+        "علي", "كريم", "سارة", "فاطمة", "أحمد",
+        "لديه", "عنده", "كم يبقى", "كم المجموع", "كم عدد",
+        "اشترى", "باع", "أعطى", "استلم", "وزّع",
+        "أكياس", "صناديق", "كيلو", "لتر", "متر",
+        "تلاميذ", "أطفال", "تفاح", "حلوى", "برتقال",
+        "في المجموع", "في الكل", "المتبقي",
+        "مسألة", "احسب", "أوجد",
+    ]
+
+    # Présence de chiffres ET de mots de contexte = problème énoncé
+    has_number = any(c.isdigit() for c in msg)
+    has_context = any(mot in msg for mot in mots_probleme_fr + mots_probleme_ar)
+
+    # Si c'est un calcul direct (ex: "3+4", "15×6"), ce n'est pas un problème
+    import re
+    is_direct_calc = bool(re.search(r'\d+\s*[+\-×÷*/]\s*\d+', msg))
+
+    return has_context and has_number and not is_direct_calc
 
 
 def generer_menu_choix(operation, niveau, langue):
@@ -1591,11 +1955,6 @@ def detecter_etape(reply, user_input, verdict, etape_actuelle):
     # ── AMORCE → CHOIX_SUJET ou EXPLICATION ──
     # L'élève a posé sa première question ou demandé à apprendre
     if etape_actuelle == "amorce":
-        # Si un menu de choix a été affiché → attendre le choix
-        if any(mot in reply.lower() for mot in [
-            "tape le numéro", "اكتب رقم"
-        ]):
-            return "choix_sujet"
         if any(mot in reply.lower() for mot in [
             "comme", "imagine", "billes", "bonbons", "pommes",
             "كأن", "تخيل", "كرات", "حلويات",
@@ -1605,25 +1964,11 @@ def detecter_etape(reply, user_input, verdict, etape_actuelle):
             return "explication"
         return "amorce"
 
-    # ── CHOIX_SUJET → EXPLICATION ──
-    # L'élève a tapé un numéro, l'image s'affiche, GPT explique
-    if etape_actuelle == "choix_sujet":
-        if "✏️" in reply:
-            return "exercice1"
-        return "explication"
+    # ── CLARIFICATION → EXPLICATION (géré par Python, pas ici) ──
+    if etape_actuelle == "clarification":
+        return "clarification"
 
-    # ── HORS_NIVEAU → CHOIX_SUJET ou AMORCE ──
-    if etape_actuelle == "hors_niveau":
-        if "✏️" in reply:
-            return "exercice1"
-        if any(mot in reply.lower() for mot in [
-            "tape le numéro", "اكتب رقم"
-        ]):
-            return "choix_sujet"
-        return "hors_niveau"
-    
     # ── EXPLICATION → EXERCICE 1 ──
-    # Le tuteur a fini d'expliquer et pose le premier exercice
     if etape_actuelle == "explication":
         if "✏️" in reply:
             return "exercice1"
@@ -1713,33 +2058,69 @@ def injecter_consigne_etape(message, etape, langue):
             "Français": "[CONSIGNE SYSTÈME : Un menu de choix a été affiché. ATTENDS que l'élève tape un numéro. Ne fais RIEN d'autre.]",
             "العربية": "[تعليمات النظام : تم عرض قائمة اختيارات. انتظر أن يكتب التلميذ رقماً. لا تفعل شيئاً آخر.]"
         },
-        "hors_niveau": {
-            "Français": "[CONSIGNE SYSTÈME : Tu as informé l'élève que ce chapitre est au-dessus de son niveau. ATTENDS qu'il tape 1 (oui) ou 2 (non). Ne pose PAS d'exercice.]",
-            "العربية": "[تعليمات النظام : أخبرت التلميذ أن هذا الفصل أعلى من مستواه. انتظر أن يكتب 1 (نعم) أو 2 (لا). لا تطرح تمريناً.]"
+        "clarification": {
+            "Français": "[CONSIGNE SYSTÈME : L'élève a posé une question générique sur une opération mathématique. "
+                        "Pose UNE seule question de clarification courte et naturelle (PAS de menu numéroté !). "
+                        "Exemples : "
+                        "Pour addition → 'Tu veux l'addition simple ou l'addition avec retenue ? 😊' "
+                        "Pour multiplication → 'Tu veux les tables de multiplication ou la multiplication posée ? 😊' "
+                        "Pour soustraction → 'Tu veux la soustraction simple ou la soustraction avec emprunt ? 😊' "
+                        "Adapte la question au niveau de l'élève. Réponse TRÈS courte, 1-2 lignes max.]",
+            "العربية": "[تعليمات النظام : التلميذ طرح سؤالاً عاماً عن عملية حسابية. "
+                       "اطرح سؤالاً واحداً قصيراً وطبيعياً للتوضيح (بدون قائمة مرقمة !). "
+                       "أمثلة : "
+                       "للجمع : 'تريد الجمع البسيط أم الجمع مع الاحتفاظ ؟ 😊' "
+                       "للضرب : 'تريد جداول الضرب أم الضرب المطول ؟ 😊' "
+                       "للطرح : 'تريد الطرح البسيط أم الطرح مع الاستلاف ؟ 😊' "
+                       "إجابتك قصيرة جداً، سطر أو سطرين.]"
         },
         "explication": {
             "Français": "[CONSIGNE SYSTÈME : Tu es en phase EXPLICATION. "
-                        "1) Une phrase d'accroche concrète courte (ex: 'L'addition, c'est comme compter des bonbons 🍬') "
-                        "2) Explique la méthode pas à pas avec des mots simples "
-                        "3) UNE stratégie mentale (ex: 'Mets le grand nombre dans ta tête et compte sur tes doigts') "
-                        "4) Termine par '✏️ À toi !' avec UN exercice adapté au niveau. "
-                        "IMPORTANT : Ne dis 'Regarde l'image' QUE si une image a été explicitement affichée. "
-                        "Ta réponse doit être COURTE (5-6 lignes max).]",
+                        "RÈGLES ABSOLUES (violations = réponse invalide) : "
+                        "❌ INTERDIT : listes numérotées, tirets, astérisques *, blocs ``` "
+                        "❌ INTERDIT : décomposition verticale en texte (l'image le fait déjà) "
+                        "❌ INTERDIT : dire 'Regarde l'image' si aucune image n'est affichée "
+                        "✅ FORMAT : texte continu, 4-5 lignes MAX "
+                        "Structure : 1) phrase d'accroche avec objet concret du quotidien "
+                        "2) UNE stratégie mentale simple "
+                        "3) '✏️ À toi !' + UN exercice adapté au niveau. "
+                        "Si une image est affichée au-dessus : dis 'Regarde bien l'image ! 😊' et ne réexplique PAS la méthode.]",
             "العربية": "[تعليمات النظام : أنت في مرحلة الشرح. "
-                       "1) جملة ربط حسي قصيرة (مثال: 'الجمع مثل عدّ الحلويات 🍬') "
-                       "2) اشرح الطريقة خطوة بخطوة بكلمات بسيطة "
-                       "3) استراتيجية ذهنية واحدة (مثال: 'ضع العدد الكبير في رأسك وعُدّ على أصابعك') "
-                       "4) اختم بـ '✏️ دورك !' مع تمرين واحد مناسب للمستوى. "
-                       "مهم : لا تقل 'انظر للصورة' إلا إذا تم عرض صورة فعلاً. "
-                       "إجابتك يجب أن تكون قصيرة (5-6 أسطر كحد أقصى).]"
+                       "قواعد مطلقة : "
+                       "❌ ممنوع : القوائم المرقمة، النقاط، النجوم *، مربعات ``` "
+                       "❌ ممنوع : التفكيك العمودي في النص "
+                       "❌ ممنوع : قول 'انظر للصورة' إذا لم تكن هناك صورة "
+                       "✅ الشكل : نص متواصل، 4-5 أسطر كحد أقصى "
+                       "الهيكل : 1) جملة ربط بشيء ملموس من الحياة اليومية "
+                       "2) استراتيجية ذهنية واحدة بسيطة "
+                       "3) '✏️ دورك !' + تمرين واحد مناسب للمستوى. "
+                       "إذا كانت هناك صورة : قل 'انظر للصورة ! 😊' ولا تشرح الطريقة مجدداً.]"
         },
         "exercice1": {
             "Français": "[CONSIGNE SYSTÈME : Un exercice a été posé (✏️). ATTENDS la réponse. Ne donne PAS la solution.]",
             "العربية": "[تعليمات النظام : تم طرح تمرين (✏️). انتظر الإجابة. لا تعطِ الحل.]"
         },
         "correction1": {
-            "Français": "[CONSIGNE SYSTÈME : La réponse est INCORRECTE. Applique la correction en 4 TEMPS : 1.Encouragement 2.Diagnostic 3.Guidage socratique 4.Confirmation. Ne saute AUCUN temps.]",
-            "العربية": "[تعليمات النظام : الإجابة خاطئة. طبق التصحيح في 4 مراحل : 1.تشجيع 2.تشخيص 3.توجيه سقراطي 4.تأكيد. لا تتخطَّ أي مرحلة.]"
+            "Français": "[CONSIGNE SYSTÈME : La réponse est INCORRECTE. "
+                        "RÈGLES ABSOLUES : "
+                        "❌ NE DONNE JAMAIS la bonne réponse directement. "
+                        "❌ PAS de markdown gras **réponse**. "
+                        "❌ NE POSE PAS de nouvel exercice (✏️) — attends que l'élève retente. "
+                        "✅ Applique les 4 TEMPS dans cet ordre STRICT : "
+                        "TEMPS 1 : Encouragement chaleureux ('👏 C'est courageux !') "
+                        "TEMPS 2 : Diagnostic (explique POURQUOI c'est faux, avec la méthode) "
+                        "TEMPS 3 : Guidage socratique (pose UNE question pour guider SANS donner la réponse) "
+                        "TEMPS 4 : ARRÊTE-TOI. N'écris plus rien. Attends que l'élève réponde à ta question.]",
+            "العربية": "[تعليمات النظام : الإجابة خاطئة. "
+                       "قواعد مطلقة : "
+                       "❌ لا تعطِ الإجابة الصحيحة مباشرة أبداً. "
+                       "❌ لا تستخدم الخط العريض **إجابة**. "
+                       "❌ لا تطرح تمريناً جديداً (✏️) — انتظر أن يحاول التلميذ مجدداً. "
+                       "✅ طبق المراحل الأربع بهذا الترتيب الصارم : "
+                       "المرحلة 1 : تشجيع حار ('👏 شجاع أنك حاولت !') "
+                       "المرحلة 2 : تشخيص (اشرح لماذا الإجابة خاطئة مع الطريقة) "
+                       "المرحلة 3 : توجيه سقراطي (اطرح سؤالاً واحداً للتوجيه بدون إعطاء الإجابة) "
+                       "المرحلة 4 : توقف. لا تكتب شيئاً آخر. انتظر رد التلميذ.]"
         },
         "exercice2": {
             "Français": "[CONSIGNE SYSTÈME : Pose l'exercice 2 (✏️) avec des nombres DIFFÉRENTS. ATTENDS la réponse.]",
@@ -1815,6 +2196,12 @@ Langue : **{langue}**
 {rag_section}
 
 ════════════════════════════════
+PRIORITÉ ABSOLUE
+════════════════════════════════
+Si le message contient [CONSIGNE] ou [تعليمات النظام], ces instructions
+ont la priorité sur TOUTES les règles ci-dessous. Suis-les à la lettre.
+
+════════════════════════════════
 RÈGLES ABSOLUES — LIRE EN PREMIER
 ════════════════════════════════
 
@@ -1825,72 +2212,97 @@ RÈGLES ABSOLUES — LIRE EN PREMIER
 5. Chiffres arabes uniquement : 0-9. JAMAIS ١٢٣
 6. L'élève peut librement combiner des opérations (ex: 3+2-1). C'est normal et accepté.
 7. L'exercice doit TOUJOURS utiliser des nombres DIFFÉRENTS de l'exemple.
-8. Ne mentionne JAMAIS le mauvais nombre de l'élève dans ta réponse (ex: ne dis JAMAIS "pas 12" ou "au lieu de 5"). Donne uniquement le résultat correct.
-9. JAMAIS de markdown : INTERDIT d'utiliser **gras**, *italique*, # titres ou tout autre formatage markdown. Texte brut uniquement.
+8. Ne mentionne JAMAIS le mauvais nombre de l'élève dans ta réponse. Donne uniquement le résultat correct.
+9. JAMAIS de markdown : INTERDIT d'utiliser **gras**, *italique*, # titres, listes -, listes 1. ou tout autre formatage. Texte brut uniquement.
+10. JAMAIS de décomposition verticale en texte si une image est déjà affichée — l'image le montre.
 
 ════════════════════════════════
 CHAPITRES COUVERTS (CE1 → CE6)
 ════════════════════════════════
-Tu enseignes UNIQUEMENT ces 4 chapitres du primaire :
+Tu enseignes ces opérations du primaire :
 ✅ Addition (+)
-✅ Soustraction (-) → résultat toujours positif en primaire
+✅ Soustraction (-)  → résultat toujours positif en primaire
 ✅ Multiplication (×)
-✅ Fractions (/)
+✅ Division (÷)  → inclut la division posée, division avec reste, division décimale
+✅ Fractions      → introduction, opérations sur fractions (CE3 → CE6)
 
-❌ TOUTE question qui ne concerne PAS ces 4 opérations →
+✅ INCLUS dans la division et les opérations :
+   Les problèmes énoncés (partage, distribution, contextuels) FONT PARTIE des 4 opérations.
+   "45 bonbons partagés entre 7 enfants" = division : 45 ÷ 7 → aide toujours l'élève.
+   "Ali a 3 sacs de 4 bonbons" = multiplication → aide toujours l'élève.
+   Ces problèmes NE sont PAS hors de ton domaine.
 
-🔴 RÈGLE GRANDS NOMBRES — RESPECT DU NIVEAU :
-Si l'élève pose un calcul avec des nombres TROP GRANDS pour son niveau,
-réponds avec bienveillance et redirige :
+❌ HORS DOMAINE (seulement ces sujets) :
+   Géométrie, histoire, science, sport, cuisine, géographie, langues,
+   mesures, algèbre, physique-chimie, tout ce qui n'est PAS arithmétique.
 
-CE1 : nombres de 0 à 20
-CE2 : nombres jusqu'à 99
-CE3 : nombres jusqu'à 999
-CE4 : nombres jusqu'à 9999
-CE5 : grands nombres + décimaux simples
-CE6 : décimaux complexes + fractions
-
-Si un élève de CE1 demande 1234567 × 9876543, réponds :
-FR : "Waouh, tu es ambitieux ! 🌟 Ces grands nombres, c'est pour plus tard !
-     Commençons par maîtriser les petits nombres d'abord.
-     Essaie plutôt : [exercice adapté au niveau] 😊"
-AR : "رائع، طموحك كبير ! 🌟 هذه الأعداد الكبيرة ستدرسها لاحقاً !
-     لنبدأ بإتقان الأعداد الصغيرة أولاً. جرب : [تمرين مناسب للمستوى] 😊"
-
-   RÈGLE UNIVERSELLE ET ABSOLUE :
-   Peu importe le sujet (géométrie, histoire, science, sport, cuisine, animaux,
-   géographie, langues, formes, mesures, algèbre ou TOUT autre sujet) :
-   NE DONNE AUCUNE INFORMATION. NE PAS expliquer. NE PAS définir.
-   NE PAS répondre même partiellement. NE PAS mentionner quand l'élève apprendra ce sujet.
-
-   Réponds TOUJOURS avec ce message exact (selon la langue) :
-   FR : "Hihi, bonne question ! 🌟 Mais je suis spécialisé dans les 4 opérations : addition ➕, soustraction ➖, multiplication ✖️ et division ➗. Pour tout le reste, ton professeur est là pour toi ! 😊 Que veux-tu apprendre avec moi ?"
-   AR : "هيهي، سؤال جميل ! 🌟 لكنني متخصص فقط في العمليات الأربع : الجمع ➕ والطرح ➖ والضرب ✖️ والقسمة ➗. لكل شيء آخر، أستاذك هو من يساعدك ! 😊 ماذا تريد أن تتعلم معي ؟"
-
-   ❌ INTERDIT ABSOLU : répondre puis rediriger.
-   ❌ INTERDIT ABSOLU : "collège", "plus tard", "tu découvriras".
-   ❌ INTERDIT ABSOLU : donner la moindre information hors des 4 opérations.
+   Pour ces sujets seulement, réponds :
+   FR : "Hihi, bonne question ! 🌟 Mais je suis spécialisé dans les opérations : addition ➕, soustraction ➖, multiplication ✖️ et division ➗. Pour tout le reste, ton professeur est là pour toi ! 😊 Que veux-tu apprendre avec moi ?"
+   AR : "هيهي، سؤال جميل ! 🌟 لكنني متخصص فقط في العمليات : الجمع ➕ والطرح ➖ والضرب ✖️ والقسمة ➗. لكل شيء آخر، أستاذك هو من يساعدك ! 😊 ماذا تريد أن تتعلم معي ؟"
 
 ════════════════════════════════
 SÉQUENCE PÉDAGOGIQUE (ordre strict)
 ════════════════════════════════
 
 📖 EXPLICATION (Apprentissage actif — OBLIGATOIRE avant tout exercice) :
-Tu dois TOUJOURS expliquer AVANT de poser un exercice. L'explication suit 3 niveaux :
+Tu dois TOUJOURS expliquer AVANT de poser un exercice. L'explication suit ces règles :
 
 1. ANCRAGE CONCRET : Relie l'opération à un objet du quotidien de l'enfant.
+   EXCEPTION : Si une [CONSIGNE] précise les chiffres à utiliser, utilise CES chiffres uniquement.
    Exemples d'objets : bonbons 🍬, billes 🔵, pommes 🍎, doigts 🤚, étoiles ⭐
    ✅ "L'addition, c'est comme mettre des billes dans un sac."
    ❌ "L'addition est une opération qui consiste à..."
 
 2. DÉCOMPOSITION VISUELLE VERTICALE : Montre le calcul POSÉ VERTICALEMENT avec les retenues visibles.
-   ⛔ EXCEPTION ABSOLUE — SI UNE IMAGE EST AFFICHÉE :
-   Si le message contient [CONSIGNE SYSTÈME] mentionnant une image affichée au-dessus,
-   NE FAIS ABSOLUMENT AUCUNE décomposition verticale en texte.
-   L'image montre déjà la méthode — dis UNIQUEMENT : "Regarde bien l'image ! 😊"
-   Toute décomposition verticale quand une image est affichée = VIOLATION GRAVE.
-      ✅ Sans image : si aucune image n'est affichée, explique avec des mots simples
-   et des emojis (bonbons 🍬, billes 🔵, doigts 🤚). Pas de décomposition verticale.
+   EXCEPTION ABSOLUE : Si une image pédagogique est affichée, NE fais PAS de décomposition en texte.
+   L'image montre déjà la méthode — dis juste "Regarde bien l'image ! 😊"
+   RÈGLE : Toujours poser les calculs verticalement, jamais horizontalement.
+   Utilise 🔴 pour les retenues et 🟢 pour le résultat final.
+
+   - Addition avec retenue (ex: 27+35) :
+     "  2 7
+     + 3 5
+     -----
+     🔴 1    (7+5=12, j'écris 2 je retiens 🔴1)
+       6 2  🟢
+     → Unités : 7+5=12 → j'écris 2, je retiens 🔴1
+     → Dizaines : 2+3+🔴1=6
+     → Résultat : 🟢 62 !"
+
+   - Soustraction avec emprunt (ex: 52-27) :
+     " ⁴5 ¹²2
+     -  2  7
+     -------
+          2 5  🟢
+     → Unités : 2<7 → j'emprunte 🔴1 dizaine → 12-7=5
+     → Dizaines : 5-🔴1-2=2
+     → Résultat : 🟢 25 !"
+
+   - Multiplication avec retenue (ex: 23×4) :
+     "  2 3
+     ×   4
+     -----
+     🔴 1    (3×4=12, j'écris 2 je retiens 🔴1)
+       9 2  🟢
+     → Unités : 3×4=12 → j'écris 2, je retiens 🔴1
+     → Dizaines : 2×4+🔴1=9
+     → Résultat : 🟢 92 !"
+
+   - Division euclidienne (ex: 95÷4) :
+     " 9 5 | 4
+       8   |----
+       --  | 2 3  🟢
+       1 5
+       1 2
+       ---
+         3  (reste)
+     → Vérification : 4×23+3=95 ✅"
+
+   - Fractions 1/2 :
+     "   1
+      ─── = une moitié 🍕
+       2
+     → Pizza coupée en 2 parts égales, tu prends 1 !"
 
 3. STRATÉGIE MENTALE (ZPD) : Donne UNE technique concrète que l'enfant peut reproduire seul.
    - Addition : "Mets 5 dans ta tête 🧠, lève 3 doigts 🤚, compte : 6, 7, 8 !"
@@ -1988,8 +2400,13 @@ Exemples avec + et − seulement (même priorité) :
    3 − 7 + 6 → REGROUPE : 3+6=9, puis 9−7=2  ✅ (évite 3-7=-4)
    5 − 7 + 9 → REGROUPE : 5+9=14, puis 14−7=7 ✅ (évite 5-7=-2)
 
-⚠️ Le message contient [VERDICT PYTHON: INCORRECT ❌] avec les ÉTAPES EXACTES calculées par Python.
-   Tu DOIS expliquer CES étapes exactement telles quelles — ne les change pas, ne les invente pas.
+⚠️ RÈGLE ABSOLUE — VERDICT PYTHON :
+   Le message de l'élève peut contenir un [VERDICT PYTHON]. Ce verdict est calculé par Python et il a TOUJOURS raison.
+   Tu ne dois JAMAIS le contredire ou faire ton propre calcul.
+    → Si [VERDICT PYTHON: CORRECT ✅] : tu DOIS dire Bravo et féliciter. JAMAIS dire que c'est faux.
+    → Si [VERDICT PYTHON: PRESQUE CORRECT 🟡] : tu DOIS féliciter le quotient trouvé, puis demander gentiment le reste. JAMAIS dire que c'est faux. Exemple : 'Bravo pour le quotient ! 👏 Mais n'oublie pas le reste ! Combien reste-t-il ? 🤔'
+    → Si [VERDICT PYTHON: INCORRECT ❌] : tu DOIS suivre les 4 TEMPS de correction. Les ÉTAPES EXACTES sont fournies — utilise-les telles quelles, ne les invente pas.
+    → Si pas de verdict : l'élève n'a pas répondu à un exercice, traite normalement.
 🔴 Décimaux :
 → Nombres entiers uniquement sauf si l'élève est visiblement en 5ème/6ème.
 → Si hors niveau → STOP + "👏 Tu découvriras les décimaux plus tard 📚 💪"
@@ -2059,6 +2476,18 @@ def get_llm(_api_key):
 
 llm = get_llm(api_key)
 
+# LLM léger pour la classification d'intention (rapide + économique)
+@st.cache_resource
+def get_llm_classifier(_api_key):
+    return ChatOpenAI(
+        model="gpt-4o-mini",
+        temperature=0,
+        api_key=_api_key,
+        max_tokens=10   # 1 mot suffit
+    )
+
+llm_classifier = get_llm_classifier(api_key)
+
 # ============================================================
 # 12. GESTION DE L'ÉTAT
 # ============================================================
@@ -2080,9 +2509,14 @@ if "choix_consigne" not in st.session_state: st.session_state["choix_consigne"] 
 if "choix_list"     not in st.session_state: st.session_state["choix_list"]     = None
 if "hors_niveau_operation" not in st.session_state: st.session_state["hors_niveau_operation"] = None
 if "hors_niveau_niv_min"   not in st.session_state: st.session_state["hors_niveau_niv_min"]   = None
-if "nb_tentatives"         not in st.session_state: st.session_state["nb_tentatives"]         = 0
+# ── Persistance des images dans l'historique ──────────────────
+if "images_history" not in st.session_state: st.session_state["images_history"] = {}
+# ── Compteur de bonnes réponses consécutives (Python contrôle) ──
+if "bonnes_consec"  not in st.session_state: st.session_state["bonnes_consec"]  = 0
+# ── Calcul direct posé par l'élève (ex: "13-7") ────────────────
+if "calcul_direct"  not in st.session_state: st.session_state["calcul_direct"]  = None
+if "operation_detectee" not in st.session_state: st.session_state["operation_detectee"] = None
 
-if "images_history"        not in st.session_state: st.session_state["images_history"]        = {}
 chat_history   = st.session_state[session_key]
 etape_actuelle = st.session_state[etape_key]
 score          = st.session_state[score_key]
@@ -2106,7 +2540,7 @@ if not chat_actif:
     # ── Formulaire prénom + niveau ──────────────────────────
     lbl_prenom = "👦 Ton prénom" if langue_choisie == "Français" else "👦 اسمك"
     lbl_niveau = "📚 Ton niveau" if langue_choisie == "Français" else "📚 مستواك"
-    lbl_start  = "🚀 Commencer" if langue_choisie == "Français" else "🚀 ابدأ"
+    lbl_start  = " Commencer" if langue_choisie == "Français" else " ابدأ"
 
     # Bandeau compact animé
     if langue_choisie == "Français":
@@ -2157,9 +2591,9 @@ if not chat_actif:
         st.session_state["debut_session"] = __import__("datetime").datetime.now()
         # Message de bienvenue personnalisé
         if langue_choisie == "Français":
-            msg_bv = f"👋 Bonjour **{prenom}** ! 🌟\n\nJe suis ton tuteur de mathématiques — niveau **{niveau}** 😊\n\n❓ Écris un calcul ou dis-moi ce que tu veux apprendre ! 🚀"
+            msg_bv = f"👋 Bonjour **{prenom}** ! 🌟\n\nJe suis ton tuteur de mathématiques — niveau **{niveau}** 😊\n\nÉcris un calcul ou dis-moi ce que tu veux apprendre !"
         else:
-            msg_bv = f"👋 مرحباً **{prenom}** ! 🌟\n\nأنا معلمك للرياضيات — مستوى **{niveau}** 😊\n\n❓ اكتب عملية أو أخبرني بما تريد تعلمه ! 🚀"
+            msg_bv = f"👋 مرحباً **{prenom}** ! 🌟\n\nأنا معلمك للرياضيات — مستوى **{niveau}** 😊\n\n اكتب عملية أو أخبرني بما تريد تعلمه ! "
         st.session_state[session_key] = [AIMessage(content=msg_bv)]
         st.rerun()
 
@@ -2266,9 +2700,13 @@ else:
                 duree_minutes = duree,
             )
             st.session_state[session_key]    = []
-            st.session_state["images_history"] = {}
             st.session_state[etape_key]      = "amorce"
             st.session_state[score_key]      = {"bonnes": 0, "total": 0}
+            st.session_state["bonnes_consec"]  = 0
+            st.session_state["images_history"] = {}
+            st.session_state["choix_image"]    = None
+            st.session_state["choix_consigne"] = None
+            st.session_state["choix_list"]     = None
             st.session_state[eleve_key]      = {"prenom": "", "niveau": "", "session_db_id": None}
             st.session_state[chat_actif_key] = False
             st.session_state["debut_session"]  = None
@@ -2408,10 +2846,8 @@ else:
 # ============================================================
 # 14. AFFICHAGE HISTORIQUE + AUTO-SCROLL
 # ============================================================
-# NOTE : On n'affiche PAS d'images dans l'historique via detecter_image_operation().
-# Les images s'affichent UNIQUEMENT via st.session_state["choix_image"],
-# c'est-à-dire après que l'élève a tapé le numéro de son choix.
-# Cela évite d'afficher une image avant que le menu de choix soit présenté.
+# Les images sont stockées dans images_history {index → path}
+# et réaffichées à chaque rerun pour qu'elles persistent.
 _img_hist = st.session_state.get("images_history", {})
 for i, msg in enumerate(chat_history):
     role = "user" if isinstance(msg, HumanMessage) else "assistant"
@@ -2549,9 +2985,9 @@ if user_input:
     # ── Détection message incompréhensible — Python AVANT GPT ─
     if detecter_message_incomprehensible(user_input):
         if langue_choisie == "العربية":
-            reply_inc = "👋 مرحباً ! 😊 أنا معلم الرياضيات للسلك الابتدائي.\nاكتب عملية حسابية أو أخبرني بما تريد تعلمه ! 🚀"
+            reply_inc = "👋 مرحباً ! 😊 أنا معلم الرياضيات للسلك الابتدائي.\nاكتب عملية حسابية أو أخبرني بما تريد تعلمه ! "
         else:
-            reply_inc = "👋 Bonjour ! 😊 Je suis ton tuteur de maths du cycle primaire.\nÉcris un calcul ou dis-moi ce que tu veux apprendre ! 🚀"
+            reply_inc = "👋 Bonjour ! 😊 Je suis ton tuteur de maths du cycle primaire.\nÉcris un calcul ou dis-moi ce que tu veux apprendre ! "
         st.session_state[session_key].append(HumanMessage(content=user_input))
         st.session_state[session_key].append(AIMessage(content=reply_inc))
         with st.chat_message("assistant"):
@@ -2569,146 +3005,311 @@ if user_input:
 
     # detecter_signe_incompatible supprimée — opérations mixtes acceptées ✅
 
-    # ── MENU DE CHOIX : Proposer les types d'opération ──────
+    # ── APPROCHE HYBRIDE : spécifique → image auto / générique → clarification ──
     etape_actuelle = st.session_state[etape_key]
+    niveau_eleve   = st.session_state[eleve_key].get("niveau", "CE3")
 
-    # CAS 1 : L'élève est en amorce et demande une opération → afficher le menu
+    # ── Helpers locaux ──────────────────────────────────────────
+    def _niv_num(niv):
+        try: return int(str(niv).replace("CE",""))
+        except: return 3
+
+    def est_question_generique(msg):
+        """True si l'élève nomme une opération sans préciser le type."""
+        m = (msg or "").lower().strip()
+        # On réutilise le résultat GPT : si operation a été détectée,
+        # c'est que l'élève parle d'une opération (même avec fautes)
+        has_generic = operation is not None
+        mots_specifiques = [
+            "retenue","emprunt","sans","avec","simple","deux chiffres","trois chiffres",
+            "virgule","décimale","dénominateur","fractions équivalentes",
+            "احتفاظ","استلاف","بدون","بعدد","أرقام","عشري",
+        ]
+        has_specific = any(mot in m for mot in mots_specifiques)
+        has_number   = any(c.isdigit() for c in m)
+        return has_generic and not has_specific and not has_number
+    def get_image_for_question(msg, niv):
+        """Détecte l'image directement depuis la question de l'élève + niveau."""
+        m   = (msg or "").lower()
+        n   = _niv_num(niv)
+        imgs = IMAGES_MAP.get(langue_choisie, IMAGES_MAP["Français"])
+
+        # ── Tables ──
+        if any(x in m for x in ["table","جدول","جداول"]):
+            return imgs.get("tables_multiplication"), "tables de multiplication de 1 à 9"
+
+        # ── Addition ──
+        if any(x in m for x in ["addition","additionner","ajouter","الجمع"]):
+            if any(x in m for x in ["3 chiffres","trois chiffres","ثلاث","مئ"]):
+                return imgs.get("addition_3_chiffres"), "addition à 3 chiffres avec retenues"
+            if any(x in m for x in ["retenue","retenu","احتفاظ"]):
+                return imgs.get("addition_avec_retenue"), "addition avec retenue, 2 chiffres"
+            if any(x in m for x in ["sans retenue","sans retenu","بدون احتفاظ"]):
+                return imgs.get("addition_sans_retenue"), "addition sans retenue, 2 chiffres"
+            # Défaut selon niveau
+            if n <= 1: return imgs.get("addition_simple"),        "addition simple, 1 chiffre"
+            if n == 2: return imgs.get("addition_sans_retenue"),   "addition sans retenue, 2 chiffres"
+            if n == 3: return imgs.get("addition_avec_retenue"),   "addition avec retenue, 2-3 chiffres"
+            if n == 4: return imgs.get("addition_3_chiffres"),     "addition à 3 chiffres"
+            return imgs.get("addition_3_chiffres"), "addition à 3 chiffres"
+
+        # ── Soustraction ──
+        if any(x in m for x in ["soustraction","soustraire","enlever","الطرح"]):
+            if any(x in m for x in ["double emprunt","استلافين"]):
+                return imgs.get("soustraction_double_emprunt"), "soustraction avec double emprunt, 3 chiffres"
+            if any(x in m for x in ["3 chiffres","trois chiffres"]) and any(x in m for x in ["3 chiffres","trois chiffres","mêm"]):
+                return imgs.get("soustraction_3_chiffres"), "soustraction à 3 chiffres"
+            if any(x in m for x in ["emprunt","استلاف","retenu","retenue"]):
+                return imgs.get("soustraction_avec_retenue"), "soustraction avec emprunt, 2 chiffres"
+            if n <= 1: return imgs.get("soustraction_simple"),       "soustraction simple"
+            if n == 2: return imgs.get("soustraction_sans_retenue"), "soustraction sans emprunt"
+            if n == 3: return imgs.get("soustraction_avec_retenue"), "soustraction avec emprunt"
+            if n == 4: return imgs.get("soustraction_3_chiffres"),   "soustraction à 3 chiffres"
+            return imgs.get("soustraction_3_chiffres"), "soustraction à 3 chiffres"
+
+        # ── Multiplication ──
+        if any(x in m for x in ["multiplication","multiplier","multiplie","الضرب","يضرب","×"]):
+            if any(x in m for x in ["table","جدول"]):
+                return imgs.get("tables_multiplication"), "tables de multiplication"
+            if any(x in m for x in ["10","100","1000"]):
+                return imgs.get("multiplication_10_100_1000"), "multiplication par 10, 100, 1000"
+            if any(x in m for x in ["fraction","كسر"]):
+                return imgs.get("multiplication_fractions"), "multiplication de fractions"
+            if any(x in m for x in ["deux chiffres","2 chiffres","بعددين"]):
+                return imgs.get("multiplication_2_chiffres"), "multiplication 2 chiffres × 2 chiffres, deux lignes + addition finale"
+            if n <= 3: return imgs.get("tables_multiplication"),   "tables de multiplication"
+            if n == 4: return imgs.get("multiplication_simple"),   "multiplication 2 chiffres × 1 chiffre"
+            if n == 5: return imgs.get("multiplication_2_chiffres"), "multiplication 2 chiffres × 2 chiffres"
+            return imgs.get("multiplication_3_chiffres"), "multiplication à 3 chiffres"
+
+        # ── Division ──
+        if any(x in m for x in ["division","diviser","divise","القسمة","يقسم","÷"]):
+            if any(x in m for x in ["fraction","كسر"]):
+                return imgs.get("division_fractions"), "division de fractions"
+            if any(x in m for x in ["deux chiffres","2 chiffres","بعددين"]):
+                return imgs.get("division_2_chiffres"), "division posée, diviseur à 2 chiffres"
+            if any(x in m for x in ["reste","الباقي"]):
+                return imgs.get("division_avec_reste"), "division avec reste"
+            if n <= 3: return imgs.get("division_simple"),     "division simple, exemple image : 84 ÷ 4 = 21"
+            if n == 4: return imgs.get("division_2_chiffres"), "division diviseur 2ch, exemple image : 156 ÷ 12 = 13"
+            return imgs.get("division_2_chiffres"), "division posée, diviseur à 2 chiffres"
+
+        # ── Fractions ──
+        if any(x in m for x in ["fraction","كسر","كسور","moitié","quart","tiers","نصف","ربع","ثلث"]):
+            if any(x in m for x in ["équival","متكافئ"]):
+                return imgs.get("fractions_equivalentes"), "fractions équivalentes"
+            if any(x in m for x in ["simplif","تبسيط","pgcd"]):
+                return imgs.get("simplification_fractions"), "simplification de fractions"
+            if any(x in m for x in ["compar","مقارنة"]):
+                return imgs.get("comparaison_fractions"), "comparaison de fractions"
+            if any(x in m for x in ["décim","0,","عشري","0."]):
+                return imgs.get("fractions_decimales"), "conversion fraction ↔ décimal"
+            if any(x in m for x in ["multipli","ضرب"]):
+                return imgs.get("multiplication_fractions"), "multiplication de fractions"
+            if any(x in m for x in ["divis","قسم"]):
+                return imgs.get("division_fractions"), "division de fractions"
+            if any(x in m for x in ["additionn","جمع","ajouter"]):
+                if any(x in m for x in ["différent","مختلف","dénominateurs différents"]):
+                    return imgs.get("fractions_denom_diff"), "addition fractions dénominateurs différents, PPCM"
+                return imgs.get("addition_fractions"), "addition de fractions même dénominateur"
+            if any(x in m for x in ["soustrai","طرح"]):
+                return imgs.get("soustraction_fractions"), "soustraction de fractions même dénominateur"
+            if any(x in m for x in ["nombre","عدد","de 20","de 12"]):
+                return imgs.get("fraction_d_un_nombre"), "prendre une fraction d'un nombre entier"
+            if n <= 4: return imgs.get("fractions_introduction"),  "lecture de fractions, numérateur et dénominateur"
+            if n == 5: return imgs.get("addition_fractions"),      "addition de fractions même dénominateur"
+            return imgs.get("fractions_denom_diff"), "addition fractions dénominateurs différents"
+
+        # ── Autres concepts ──
+        if any(x in m for x in ["double","moitié","الضعف","النصف"]):
+            return imgs.get("double_moitie"), "double et moitié"
+        if any(x in m for x in ["priorité","أولوية"]):
+            return imgs.get("priorite_operations"), "priorité des opérations"
+        if any(x in m for x in ["multiple","diviseur","مضاعف","قاسم"]):
+            return imgs.get("multiples_diviseurs"), "multiples et diviseurs"
+        if any(x in m for x in ["numérat","centaine","dizaine","مئة","عشرة"]):
+            return imgs.get("numeration"), "numération centaines, dizaines, unités"
+
+        return None, None
+
+    # ══════════════════════════════════════════════════════════════
+    # FLUX HYBRIDE — Le niveau sert uniquement aux statistiques Supabase.
+    # Le chatbot répond à TOUTE question sans restriction de niveau.
+    # L'image est choisie selon la question/calcul, pas le niveau.
+    # ══════════════════════════════════════════════════════════════
+
+    # ── Détection calcul dans une demande d'explication (TOUS ÉTATS) ──
+    # Ex: "montre moi comment faire 24-17" pendant correction/exercice
+    if etape_actuelle not in ("amorce", "clarification", "explication"):
+        calcul_phrase = extraire_calcul_dans_phrase(user_input)
+        if calcul_phrase:
+            expr_p, a_p, op_p, b_p = calcul_phrase
+            img_path_p, consigne_p = get_image_for_calcul(a_p, op_p, b_p, niveau_eleve)
+            if img_path_p and os.path.exists(img_path_p):
+                st.session_state["choix_image"]    = img_path_p
+                st.session_state["choix_consigne"] = consigne_p
+                st.session_state["calcul_direct"]  = expr_p
+                st.session_state[etape_key]        = "explication"
+                etape_actuelle                     = "explication"
+
+    # ── Détection changement de sujet EN COURS de séquence ──────
+    mots_changement = ["passe à","passe a","change de","autre chose","autre sujet",
+                       "maintenant","je veux apprendre","ننتقل","موضوع آخر","الآن أريد"]
+    est_changement = (
+        etape_actuelle in ("exercice1","exercice2","correction1","correction2","quiz","correction_quiz","explication")
+        and any(m in user_input.lower() for m in mots_changement)
+        and detecter_operation_demandee(user_input) is not None
+    )
+    if est_changement:
+        st.session_state[etape_key]       = "amorce"
+        st.session_state["bonnes_consec"]  = 0
+        st.session_state["choix_image"]    = None
+        st.session_state["choix_consigne"] = None
+        etape_actuelle = "amorce"
     if etape_actuelle == "amorce":
         operation = detecter_operation_demandee(user_input)
-        if operation:
-            niveau_eleve = st.session_state[eleve_key].get("niveau", "CE3")
-            menu_text, choix_list, niv_min = generer_menu_choix(operation, niveau_eleve, langue_choisie)
-
-            if menu_text and choix_list and len(choix_list) > 1:
-                # Plusieurs choix → afficher le menu et attendre
-                st.session_state["choix_list"] = choix_list
-                st.session_state[session_key].append(HumanMessage(content=user_input))
-                st.session_state[session_key].append(AIMessage(content=menu_text))
-                st.session_state[etape_key] = "choix_sujet"
-                with st.chat_message("assistant"):
-                    st.markdown(f'<div dir="{direction}">{menu_text}</div>', unsafe_allow_html=True)
-                sid_db = st.session_state[eleve_key].get("session_db_id")
-                db_ajouter_message(sid_db, "eleve", user_input)
-                db_ajouter_message(sid_db, "tuteur", menu_text)
-                st.rerun()
-
-            elif choix_list and len(choix_list) == 1:
-                # Un seul choix → l'utiliser directement
-                choix = choix_list[0]
-                images = IMAGES_MAP.get(langue_choisie, IMAGES_MAP["Français"])
-                st.session_state["choix_image"] = images.get(choix["image"])
-                st.session_state["choix_consigne"] = choix["consigne"]
-                st.session_state[etape_key] = "explication"
-                # Continuer vers le flux GPT normal ci-dessous
-
-            elif niv_min:
-                # Opération hors niveau → message de proposition
-                niv_min_label = f"CE{niv_min}"
-                op_labels = {
-                    "addition": ("l'addition", "الجمع"),
-                    "soustraction": ("la soustraction", "الطرح"),
-                    "multiplication": ("la multiplication", "الضرب"),
-                    "division": ("la division", "القسمة"),
-                    "fractions": ("les fractions", "الكسور"),
-                }
-                op_fr, op_ar = op_labels.get(operation, (operation, operation))
-                if langue_choisie == "العربية":
-                    msg_hors = (
-                        f"😊 {op_ar} يُدرَّس ابتداءً من {niv_min_label} !\n\n"
-                        f"لكن رائع أنك تريد أن تتعلم ! 🌟\n"
-                        f"هل تريد أن نتعلمه معاً ؟\n\n"
-                        f"1️⃣ نعم، أريد أن أتعلم !\n"
-                        f"2️⃣ لا، أريد البقاء في مستواي"
-                    )
-                else:
-                    msg_hors = (
-                        f"😊 {op_fr.capitalize()} s'apprend à partir du {niv_min_label} !\n\n"
-                        f"Mais c'est super que tu veuilles l'apprendre ! 🌟\n"
-                        f"Tu veux qu'on l'explore ensemble quand même ?\n\n"
-                        f"1️⃣ Oui, je veux apprendre !\n"
-                        f"2️⃣ Non, je préfère rester en {niveau_eleve}"
-                    )
-                # Stocker l'opération et le niveau minimum pour la suite
-                st.session_state["hors_niveau_operation"] = operation
-                st.session_state["hors_niveau_niv_min"] = niv_min
-                st.session_state[session_key].append(HumanMessage(content=user_input))
-                st.session_state[session_key].append(AIMessage(content=msg_hors))
-                st.session_state[etape_key] = "hors_niveau"
-                with st.chat_message("assistant"):
-                    st.markdown(f'<div dir="{direction}">{msg_hors}</div>', unsafe_allow_html=True)
-                sid_db = st.session_state[eleve_key].get("session_db_id")
-                db_ajouter_message(sid_db, "eleve", user_input)
-                db_ajouter_message(sid_db, "tuteur", msg_hors)
-                st.rerun()
-
-    # CAS 2b : L'élève répond oui/non à la proposition hors-niveau
-    if etape_actuelle == "hors_niveau":
-        choix_num = traiter_choix_numerique(user_input, [{"dummy": 1}, {"dummy": 2}], langue_choisie)
-        msg_input_lower = user_input.strip().lower()
-        dit_oui = choix_num is not None and st.session_state.get("hors_niveau_operation") and \
-                  (user_input.strip() in ["1", "١"] or "oui" in msg_input_lower or "نعم" in msg_input_lower)
-        dit_non = user_input.strip() in ["2", "٢"] or "non" in msg_input_lower or "لا" in msg_input_lower
-
-        if dit_oui:
-            # L'élève veut continuer → menu du niveau minimum
-            operation  = st.session_state.get("hors_niveau_operation")
-            niv_min    = st.session_state.get("hors_niveau_niv_min", 2)
-            menu_text, choix_list, _ = generer_menu_choix(operation, f"CE{niv_min}", langue_choisie)
-            if menu_text and choix_list:
-                st.session_state["choix_list"] = choix_list
-                st.session_state[session_key].append(HumanMessage(content=user_input))
-                st.session_state[session_key].append(AIMessage(content=menu_text))
-                st.session_state[etape_key] = "choix_sujet"
-                with st.chat_message("assistant"):
-                    st.markdown(f'<div dir="{direction}">{menu_text}</div>', unsafe_allow_html=True)
-                st.session_state["hors_niveau_operation"] = None
-                st.session_state["hors_niveau_niv_min"] = None
-                st.rerun()
-            elif choix_list and len(choix_list) == 1:
-                choix = choix_list[0]
-                images = IMAGES_MAP.get(langue_choisie, IMAGES_MAP["Français"])
-                st.session_state["choix_image"] = images.get(choix["image"])
-                st.session_state["choix_consigne"] = choix["consigne"]
-                st.session_state[etape_key] = "explication"
-                st.session_state["hors_niveau_operation"] = None
-
-        elif dit_non:
-            # L'élève veut rester à son niveau
-            niveau_eleve = st.session_state[eleve_key].get("niveau", "CE3")
-            if langue_choisie == "العربية":
-                msg_retour = f"بالطبع ! 😊 ماذا تريد أن تتعلم في مستواك {niveau_eleve} ؟\nالجمع أو الطرح أو الضرب ؟"
+        calcul = detecter_calcul_direct(user_input)
+        # ── CAS 1 : Calcul direct (ex: "13-7", "27+35", "15/4") ──
+        if calcul and not operation:
+            expr, a, op, b = calcul
+            img_path, consigne = get_image_for_calcul(a, op, b, niveau_eleve)
+            # Pour la version arabe, utiliser l'image AR correspondante
+            if img_path and langue_choisie == "العربية":
+                ar_imgs = IMAGES_MAP.get("العربية", {})
+                for key, path in IMAGES_MAP["Français"].items():
+                    if path == img_path:
+                        ar_path = ar_imgs.get(key, img_path)
+                        if os.path.exists(ar_path):
+                            img_path = ar_path
+                        break
+            if consigne:
+                st.session_state["choix_consigne"] = consigne
+            if img_path and os.path.exists(img_path):
+                st.session_state["choix_image"] = img_path
             else:
-                msg_retour = f"Pas de problème ! 😊 Qu'est-ce que tu veux apprendre en {niveau_eleve} ?\nAddition, soustraction ou autre chose ?"
-            st.session_state[session_key].append(HumanMessage(content=user_input))
-            st.session_state[session_key].append(AIMessage(content=msg_retour))
-            st.session_state[etape_key] = "amorce"
-            st.session_state["hors_niveau_operation"] = None
-            st.session_state["hors_niveau_niv_min"] = None
-            with st.chat_message("assistant"):
-                st.markdown(f'<div dir="{direction}">{msg_retour}</div>', unsafe_allow_html=True)
-            st.rerun()
-
-    # CAS 2 : L'élève a tapé un numéro après le menu → traiter le choix
-    if etape_actuelle == "choix_sujet" and st.session_state.get("choix_list"):
-        choix = traiter_choix_numerique(user_input, st.session_state["choix_list"], langue_choisie)
-        if choix:
-            images = IMAGES_MAP.get(langue_choisie, IMAGES_MAP["Français"])
-            st.session_state["choix_image"] = images.get(choix["image"])
-            st.session_state["choix_consigne"] = choix["consigne"]
-            st.session_state["choix_list"] = None
+                # Log de diagnostic pour comprendre pourquoi l'image ne charge pas
+                import logging
+                logging.warning(f"[IMAGE] Introuvable : {img_path}")
+                logging.warning(f"[IMAGE] ABS_PATH = {ABS_PATH}")
+                logging.warning(f"[IMAGE] Existe : {os.path.exists(img_path) if img_path else 'None'}")
+                st.session_state["choix_image"] = None
+            st.session_state["calcul_direct"] = expr
             st.session_state[etape_key] = "explication"
-            # Continuer vers le flux GPT ci-dessous
-        else:
-            # L'élève n'a pas tapé un numéro valide
-            if langue_choisie == "العربية":
-                reply_err = "😊 اكتب فقط رقم اختيارك (مثلا : 1 أو 2) 🎯"
+
+        elif operation:
+            # ── CAS 2 : Question générique → clarification DIRECTE (sans GPT) ──
+            if est_question_generique(user_input):
+                st.session_state["hors_niveau_operation"] = operation
+                st.session_state[etape_key] = "clarification"
+
+                # Générer la question de clarification en Python
+                _prenom = st.session_state[eleve_key].get("prenom", "")
+                if langue_choisie == "العربية":
+                    _questions = {
+                        "addition": f"تريد الجمع البسيط أم الجمع مع الاحتفاظ ؟ 😊",
+                        "soustraction": f"تريد الطرح البسيط أم الطرح مع الاستلاف ؟ 😊",
+                        "multiplication": f"تريد جداول الضرب أم الضرب المطول ؟ 😊",
+                        "division": f"تريد القسمة البسيطة أم القسمة المطولة ؟ 😊",
+                    }
+                else:
+                    _questions = {
+                        "addition": f"Tu veux l'addition simple ou l'addition avec retenue ? 😊",
+                        "soustraction": f"Tu veux la soustraction simple ou la soustraction avec emprunt ? 😊",
+                        "multiplication": f"Tu veux les tables de multiplication ou la multiplication posée ? 😊",
+                        "division": f"Tu veux la division simple ou la division posée ? 😊",
+                    }
+                _q = _questions.get(operation, "Quel type tu veux apprendre ? 😊")
+                _clarif_msg = f"{_q}"
+
+                # Injecter directement dans le chat sans appeler GPT
+                direction = "rtl" if langue_choisie == "العربية" else "ltr"
+                with st.chat_message("assistant"):
+                    st.markdown(f'<div dir="{direction}">{_clarif_msg}</div>', unsafe_allow_html=True)
+                st.session_state[session_key].append(HumanMessage(content=user_input))
+                st.session_state[session_key].append(AIMessage(content=_clarif_msg))
+                sid_db = st.session_state[eleve_key].get("session_db_id")
+                db_ajouter_message(sid_db, "eleve", user_input)
+                db_ajouter_message(sid_db, "tuteur", _clarif_msg)
+                st.stop()
+
+            # ── CAS 3 : Question spécifique → image précise via calcul extrait ──
             else:
-                reply_err = "😊 Tape juste le numéro de ton choix (par exemple : 1 ou 2) 🎯"
-            st.session_state[session_key].append(HumanMessage(content=user_input))
-            st.session_state[session_key].append(AIMessage(content=reply_err))
-            with st.chat_message("assistant"):
-                st.markdown(f'<div dir="{direction}">{reply_err}</div>', unsafe_allow_html=True)
-            st.rerun()
+                # Extraire le calcul réel via llm_classifier pour choisir la bonne image
+                # Ex: "9 pommes sur quatre enfants" → "9 ÷ 4" → 9%4≠0 → division_avec_reste
+                calcul_extrait = extraire_calcul_depuis_probleme(user_input, operation)
+                img_path, consigne = None, None
+
+                if calcul_extrait:
+                    # Parser l'expression extraite pour get_image_for_calcul
+                    import re as _re
+                    _m = _re.search(
+                        r'(\d+(?:[,\.]\d+)?)\s*([+\-−×÷*/])\s*(\d+(?:[,\.]\d+)?)',
+                        calcul_extrait
+                    )
+                    if _m:
+                        _a  = float(_m.group(1).replace(',', '.'))
+                        _op = ('÷' if _m.group(2) in ['/', '÷'] else
+                               '×' if _m.group(2) in ['*', '×'] else
+                               '-' if _m.group(2) == '−' else _m.group(2))
+                        _b  = float(_m.group(3).replace(',', '.'))
+                        img_path, consigne = get_image_for_calcul(_a, _op, _b, niveau_eleve)
+                        st.session_state["calcul_direct"] = calcul_extrait
+
+                # Fallback : get_image_for_question si extraction échoue
+                if not img_path:
+                    msg_avec_op = f"{operation} {user_input}"
+                    img_path, consigne = get_image_for_question(msg_avec_op, niveau_eleve)
+
+                if consigne:
+                    st.session_state["choix_consigne"] = consigne
+                if img_path and os.path.exists(img_path):
+                    st.session_state["choix_image"] = img_path
+                else:
+                    st.session_state["choix_image"] = None
+                    if img_path:
+                        import logging
+                        logging.warning(f"[IMAGE CAS3] Introuvable : {img_path}")
+                st.session_state["operation_detectee"] = operation
+                st.session_state[etape_key] = "explication"
+
+    # ── CAS 4 : Réponse à la clarification ──
+    elif etape_actuelle == "clarification":
+        stored_op = st.session_state.get("hors_niveau_operation", "")
+        combined  = f"{stored_op} {user_input}".strip()
+        # ── Enrichir les réponses courtes de l'élève ──
+        _ui = user_input.lower().strip()
+        if stored_op == "soustraction":
+            if "avec" in _ui and "emprunt" not in _ui:
+                combined = "soustraction avec emprunt"
+            elif "simple" in _ui or "sans" in _ui:
+                combined = "soustraction sans emprunt"
+        elif stored_op == "addition":
+            if "avec" in _ui and "retenue" not in _ui:
+                combined = "addition avec retenue"
+            elif "simple" in _ui or "sans" in _ui:
+                combined = "addition sans retenue"
+        elif stored_op == "multiplication":
+            if "table" in _ui:
+                combined = "multiplication tables"
+            elif "posée" in _ui or "posé" in _ui or "deux" in _ui or "2" in _ui:
+                combined = "multiplication deux chiffres"
+        elif stored_op == "division":
+            if "simple" in _ui or "sans" in _ui:
+                combined = "division simple"
+            elif "posée" in _ui or "posé" in _ui or "deux" in _ui or "2" in _ui:
+                combined = "division deux chiffres"
+        img_path, consigne = get_image_for_question(combined, niveau_eleve)
+        if consigne:
+            st.session_state["choix_consigne"] = consigne
+        if img_path and os.path.exists(img_path):
+            st.session_state["choix_image"] = img_path
+        else:
+            st.session_state["choix_image"] = None
+            if img_path:
+                import logging
+                logging.warning(f"[IMAGE CAS4] Introuvable : {img_path}")
+        st.session_state[etape_key] = "explication"
+        st.session_state["hors_niveau_operation"] = None
 
     # RAG (optionnel — silencieux si ChromaDB indisponible)
     context = ""
@@ -2720,16 +3321,9 @@ if user_input:
         except Exception:
             context = ""
 
-    # Prompt
+    # Prompt de base (sera recréé dans le bloc GPT avec l'étape courante)
     prenom_eleve  = st.session_state[eleve_key].get("prenom", "")
     niveau_eleve  = st.session_state[eleve_key].get("niveau", "")
-    system_prompt = get_system_prompt(langue_choisie, context,
-                                      prenom=prenom_eleve, niveau=niveau_eleve)
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", system_prompt),
-        MessagesPlaceholder(variable_name="chat_history"),
-        ("human", "{input}")
-    ])
 
     with st.chat_message("assistant"):
         with st.spinner(t["thinking"]):
@@ -2748,78 +3342,208 @@ if user_input:
                     _img_path = None
 
                 # ── 3. Machine à états : Injection de la consigne ──────
+                # Récupérer le calcul direct si posé par l'élève
+                _calcul_direct = st.session_state.pop("calcul_direct", None)
+                consigne_specifique = ""
+                # Si problème énoncé → extraire le calcul pour l'exercice
+                _op_detectee = st.session_state.pop("operation_detectee", None)
+                if not _calcul_direct and _op_detectee and detecter_probleme_enonce(user_input):
+                    _calcul_direct = extraire_calcul_depuis_probleme(user_input, _op_detectee)
+                _exercice_final = (
+                    f"Combien font  {_calcul_direct} ?"
+                    if _calcul_direct
+                    else f"un exercice de type : {_choix_consigne}"
+                )
+                _exercice_final_ar = (
+                    f"كم يساوي  {_calcul_direct} ?"
+                    if _calcul_direct
+                    else f"تمرين من نوع : {_choix_consigne}"
+                )
+
                 if _img_path and _choix_consigne and etape_actuelle == "explication":
                     # CAS A : Image affichée → consigne avec référence à l'image
+                    # Fix 3 : exercice cohérent avec l'image
+                    # Fix 5 : si 2ch×2ch → explication des 3 étapes obligatoire
+                    _consigne_lower = (_choix_consigne or "").lower()
+                    is_2x2 = (
+                        any(k in _consigne_lower for k in [
+                            "2 chiffres", "deux chiffres", "3 chiffres", "trois chiffres",
+                            "عددين", "رقمين"
+                        ])
+                        and any(k in _consigne_lower for k in [
+                            "multiplication", "ضرب"
+                        ])
+                    )
+                    # Fix 6 : détecter si l'élève a posé un problème énoncé
+                    is_pb = detecter_probleme_enonce(user_input)
+
                     if langue_choisie == "العربية":
-                        consigne_specifique = (
-                            f"[تعليمات النظام : صورة تعليمية معروضة أعلاه. "
-                            f"❌ ممنوع منعاً باتاً : التفكيك الرأسي بالأرقام (مثل : 5 7 | 6 ...). "
-                            f"❌ ممنوع : 'هل فهمت ؟' أو 'إذا أردت نجرب معاً'. "
-                            f"❌ ممنوع : شرح الطريقة — الصورة تفعل ذلك بالفعل. "
-                            f"✅ الشكل الصارم في 3 أسطر فقط : "
-                            f"السطر 1 : جملة حسية واحدة من الحياة اليومية (حلوى، تفاح...) "
-                            f"السطر 2 : 'انظر جيداً للصورة أعلاه ! 😊 تُريك الطريقة.' "
-                            f"السطر 3 : '✏️ دورك ! كم يساوي {_choix_consigne} ؟' — اطرح التمرين مباشرة. "
-                            f"لا تقل شيئاً آخر. لا تطرح سؤالاً. انتظر التلميذ.]"
-                            f"1) جملة ربط حسي قصيرة "
-                            f"2) قل : 'انظر جيدا للصورة أعلاه ! 😊' "
-                            f"3) استراتيجية ذهنية واحدة "
-                            f"4) اختم بـ '✏️ دورك !' مع تمرين واحد من نوع : {_choix_consigne} "
-                            f"بأرقام مختلفة عن الصورة. إجابتك قصيرة 5-6 أسطر.]"
-                        )
+                        if is_pb:
+                            consigne_specifique = (
+                                f"[تعليمات النظام : مسألة حسابية. "
+                                f"اكتب 5-6 أسطر بدون قوائم أو نجوم. "
+                                f"اسأل 'ماذا نعرف ؟ ماذا نبحث ؟' ثم حدد العملية المناسبة وحل الحساب. "
+                                f"اختم بـ '✏️ دورك !' بمسألة مشابهة.]"
+                            )
+                        elif is_2x2:
+                            consigne_specifique = (
+                                f"[تعليمات : صورة تعليمية معروضة أعلاه. "
+                                f"❌ ممنوع : إعادة شرح الطريقة أو تفكيك الحساب في النص. "
+                                f"✅ الشكل في 3 أسطر كحد أقصى : "
+                                f"السطر 1 : 'لحل هذا الحساب، نستخدم الضرب ! ✖️' "
+                                f"السطر 2 : 'انظر جيداً للصورة أعلاه ! 😊 تُريك كيف تحل هذا النوع من الضرب.' "
+                                f"السطر 3 : '✏️ دورك !' مع : {_exercice_final_ar}. "
+                                f"لا تعطِ الجواب.]"
+                            )
+                        else:
+                          consigne_specifique = (
+                                f"[تعليمات : صورة تعليمية معروضة أعلاه. "
+                                f"❌ ممنوع : إعادة شرح الطريقة أو وصف خطوات الحساب أو التفكيك العمودي. "
+                                f"❌ ممنوع : قول 'في الصورة نجمع...' أو سرد محتوى الصورة. "
+                                f"✅ الشكل في 3 أسطر كحد أقصى : "
+                                f"السطر 1 : 'لحل هذا الحساب، نستخدم [اسم العملية] !' "
+                                f"السطر 2 : 'انظر جيداً للصورة أعلاه ! 😊 تُريك الطريقة خطوة بخطوة.' "
+                                f"السطر 3 : '✏️ دورك ! كم يساوي [أ] [عملية] [ب] ؟' مع : {_exercice_final_ar}. "
+                                f"لا تعطِ الجواب أبداً. انتظر التلميذ.]"
+                            )
                     else:
-                        consigne_specifique = (
-                            f"[CONSIGNE SYSTÈME : Une image pédagogique est affichée au-dessus. "
-                            f"❌ INTERDIT ABSOLU : décomposition verticale en chiffres (ex: 5 7 | 6 ...). "
-                            f"❌ INTERDIT : 'Tu as compris ?' ou 'Si tu veux, on peut essayer'. "
-                            f"❌ INTERDIT : expliquer la méthode — l'image le fait déjà. "
-                            f"✅ FORMAT STRICT en 3 lignes SEULEMENT : "
-                            f"Ligne 1 : 1 phrase concrète du quotidien (bonbons, pommes...) "
-                            f"Ligne 2 : 'Regarde bien l'image ci-dessus ! 😊 Elle te montre la méthode.' "
-                            f"Ligne 3 : '✏️ À toi ! Combien font {_choix_consigne} ?' — pose directement. "
-                            f"NE DIS RIEN D'AUTRE. NE POSE PAS DE QUESTION. ATTENDS l'élève.]"
-                            f"1) Une phrase d'accroche concrète courte "
-                            f"2) Dis : 'Regarde bien l'image ci-dessus ! 😊' "
-                            f"3) UNE stratégie mentale "
-                            f"4) Termine par '✏️ À toi !' avec UN exercice de type : {_choix_consigne} "
-                            f"avec des nombres DIFFÉRENTS de ceux de l'image. Réponse COURTE 5-6 lignes.]"
-                        )
+                        if is_pb:
+                            consigne_specifique = (
+                                f"[CONSIGNE : L'élève a posé un problème énoncé. Une image pédagogique est affichée au-dessus. "
+                                f"❌ INTERDIT : décrire les chiffres de l'image, narrer le contenu de l'image. "
+                                f"❌ INTERDIT : dire 'Dans l'image, on partage/ajoute/enlève...' "
+                                f"✅ FORMAT en 4 lignes MAXIMUM : "
+                                f"Ligne 1 : 'Pour résoudre ce problème, on utilise [NOM OPERATION] !' "
+                                f"Ligne 2 : Aide l'élève à identifier l'opération dans son problème en UNE phrase. "
+                                f"Ligne 3 : 'Regarde bien l'image ci-dessus ! 😊 Elle te montre la méthode étape par étape.' "
+                                f"Ligne 4 : '✏️ À toi !' avec : {_exercice_final}. "
+                                f"NE CALCULE PAS la réponse. ATTENDS que l'élève réponde.]"
+                            )
+                        elif is_2x2:
+                            consigne_specifique = (
+                                f"[CONSIGNE : Une image pédagogique est affichée au-dessus. "
+                                f"❌ INTERDIT : réexpliquer la méthode ou décomposer le calcul en texte. "
+                                f"✅ FORMAT en 3 lignes MAXIMUM : "
+                                f"Ligne 1 : 'Pour ce calcul, on utilise la multiplication ! ✖️' "
+                                f"Ligne 2 : 'Regarde bien l'image ci-dessus ! 😊 Elle te montre comment poser et résoudre ce type de multiplication.' "
+                                f"Ligne 3 : '✏️ À toi !' avec : {_exercice_final}. "
+                                f"Ne donne pas la réponse.]"
+                            )
+                        else:
+                            consigne_specifique = (
+                                f"[CONSIGNE : Une image pédagogique est affichée au-dessus. "
+                                f"❌ INTERDIT : réexpliquer la méthode, décrire les étapes du calcul, décomposer verticalement. "
+                                f"❌ INTERDIT : dire 'Dans l'image, on fait...' ou narrer le contenu de l'image. "
+                                f"✅ FORMAT en 3 lignes MAXIMUM : "
+                                f"Ligne 1 : 'Pour ce calcul, on utilise [NOM OPERATION] !' "
+                                f"Ligne 2 : 'Regarde bien l'image ci-dessus ! 😊 Elle te montre la méthode étape par étape.' "
+                                f"Ligne 3 : '✏️ À toi ! Combien font [a] [op] [b] ?' avec : {_exercice_final}. "
+                                f"Ne donne JAMAIS la réponse. ATTENDS l'élève.]"
+                            )
                     message_final = f"{message_avec_verdict}\n{consigne_specifique}"
-                    # Nettoyer le choix après utilisation
                     st.session_state["choix_image"] = None
                     st.session_state["choix_consigne"] = None
 
                 elif _choix_consigne and etape_actuelle == "explication":
-                    # CAS B : Pas d'image mais on a un type d'exercice → explication sans image
+                    # CAS B : Pas d'image mais on a un type d'exercice
+                    is_pb = detecter_probleme_enonce(user_input)
                     if langue_choisie == "العربية":
-                        consigne_specifique = (
-                            f"[تعليمات النظام : لا توجد صورة. "
-                            f"1) جملة ربط حسي قصيرة مع مثال ملموس من الحياة اليومية "
-                            f"2) اشرح الطريقة خطوة بخطوة بكلمات بسيطة "
-                            f"3) استراتيجية ذهنية واحدة "
-                            f"4) اختم بـ '✏️ دورك !' مع تمرين من نوع : {_choix_consigne}. "
-                            f"لا تقل أبداً 'انظر للصورة' ! إجابتك قصيرة 5-6 أسطر.]"
-                        )
+                        if is_pb:
+                            consigne_specifique = (
+                                f"[تعليمات النظام : لا توجد صورة. مسألة حسابية. اكتب 5 أسطر بدون قوائم. "
+                                f"الخطوة 1 : سمِّ العملية 'لحل هذه المسألة نستخدم [العملية] !' "
+                                f"الخطوة 2 : اشرح الطريقة بجملة واحدة بسيطة "
+                                f"الخطوة 3 : 'والآن دورك :' "
+                                f"الخطوة 4 : '✏️ دورك !' مع : {_exercice_final_ar}. "
+                                f"لا تقل 'انظر للصورة'. لا تعطِ الجواب.]"
+                            )
+                        else:
+                            consigne_specifique = (
+                                f"[تعليمات مطلقة : لا توجد صورة. "
+                                f"❌ ممنوع منعاً باتاً : التفكيك العمودي، أعمدة الأرقام، المحاذاة. "
+                                f"❌ ممنوع : قول 'انظر'، 'إليك'، عرض عملية مرتبة. "
+                                f"❌ ممنوع : سؤال 'هل تريد تمريناً ؟'. يجب أن تطرح تمريناً مباشرة. "
+                                f"✅ الشكل الإلزامي في 4 أسطر كحد أقصى : "
+                                f"السطر 1 : 'لحل هذا الحساب، نستخدم [العملية] !' "
+                                f"السطر 2 : مثال ملموس من الحياة اليومية (حلويات، كرات) في جملة واحدة "
+                                f"السطر 3 : حيلة ذهنية في جملة واحدة "
+                                f"السطر 4 : '✏️ دورك ! كم يساوي [أ] [عملية] [ب] ؟' مع : {_choix_consigne}. "
+                                f"لا تعطِ الجواب أبداً. انتظر التلميذ.]"
+                            )
                     else:
-                        consigne_specifique = (
-                            f"[CONSIGNE SYSTÈME : Pas d'image disponible. "
-                            f"1) Une phrase d'accroche concrète avec exemple de la vie quotidienne "
-                            f"2) Explique la méthode pas à pas avec des mots simples "
-                            f"3) UNE stratégie mentale "
-                            f"4) Termine par '✏️ À toi !' avec UN exercice de type : {_choix_consigne}. "
-                            f"Ne dis JAMAIS 'Regarde l'image' ! Réponse COURTE 5-6 lignes.]"
-                        )
+                        if is_pb:
+                            consigne_specifique = (
+                                f"[CONSIGNE : Pas d'image. Problème énoncé. Écris 5 lignes sans listes. "
+                                f"Étape 1 : 'Pour résoudre ce problème, on utilise [OPERATION] !' "
+                                f"Étape 2 : Explique la méthode en 1 phrase simple "
+                                f"Étape 3 : 'Maintenant à toi :' "
+                                f"Étape 4 : '✏️ À toi !' avec : {_exercice_final}. "
+                                f"Ne dis jamais 'Regarde l'image'. Ne donne pas la réponse.]"
+                            )
+                        else:
+                            consigne_specifique = (
+                                f"[CONSIGNE ABSOLUE : Il n'y a PAS d'image. "
+                                f"❌ INTERDIT ABSOLU : décomposition verticale, colonnes de chiffres, alignement. "
+                                f"❌ INTERDIT : dire 'Regarde', 'Voici', montrer un calcul posé. "
+                                f"❌ INTERDIT : demander 'Tu veux un exercice ?'. Tu DOIS en poser un directement. "
+                                f"✅ FORMAT OBLIGATOIRE en 4 lignes MAXIMUM : "
+                                f"Ligne 1 : 'Pour ce calcul, on utilise [OPERATION] !' "
+                                f"Ligne 2 : Un exemple concret du quotidien (bonbons, billes) en UNE phrase "
+                                f"Ligne 3 : Une astuce mentale en UNE phrase "
+                                f"Ligne 4 : '✏️ À toi ! Combien font [a] [op] [b] ?' avec : {_choix_consigne}. "
+                                f"Ne donne JAMAIS la réponse. ATTENDS l'élève.]"
+                            )
                     message_final = f"{message_avec_verdict}\n{consigne_specifique}"
                     st.session_state["choix_consigne"] = None
 
                 else:
                     # CAS C : Flux normal (exercices, corrections, quiz...)
-                    message_final = injecter_consigne_etape(
-                        message_avec_verdict, etape_actuelle, langue_choisie
-                    )
-                    _img_path = None
+                        message_final = injecter_consigne_etape(
+                            message_avec_verdict, etape_actuelle, langue_choisie
+                        )
+                        # Forcer la consigne en priorité haute pour clarification
+                        if etape_actuelle == "clarification":
+                            if langue_choisie == "العربية":
+                                consigne_specifique = (
+                                    "[تعليمات مطلقة : التلميذ طرح سؤالاً عاماً. "
+                                    "❌ ممنوع : شرح العملية أو إعطاء أمثلة أو طرح تمرين. "
+                                    "✅ اطرح سؤالاً واحداً فقط للتوضيح في سطر واحد. "
+                                    "مثال للطرح : 'تريد الطرح البسيط أم الطرح مع الاستلاف ؟ 😊' "
+                                    "لا تكتب أي شيء آخر بعد السؤال.]"
+                                )
+                            else:
+                                consigne_specifique = (
+                                    "[CONSIGNE ABSOLUE : L'élève a posé une question générique. "
+                                    "❌ INTERDIT : expliquer l'opération, donner des exemples, poser un exercice. "
+                                    "✅ Pose UNE SEULE question de clarification en UNE ligne. "
+                                    "Exemple pour soustraction : 'Tu veux la soustraction simple ou la soustraction avec emprunt ? 😊' "
+                                    "N'écris RIEN d'autre après la question.]"
+                                )
+                        else:
+                            consigne_specifique = ""
+                        _img_path = None
 
-                response        = (prompt | llm).invoke({
+                # ── 3. Construire le system prompt avec la consigne courante ──
+                # La consigne est dans le system prompt → priorité haute → GPT ne peut pas l'ignorer
+                _consigne_sys = ""
+                if consigne_specifique:
+                    _consigne_sys = (
+                        "\n\n════════ INSTRUCTION PRIORITAIRE COURANTE ════════\n"
+                        f"{consigne_specifique}\n"
+                        "══════════════════════════════════════════════════"
+                    )
+                system_prompt = get_system_prompt(
+                    langue_choisie, context,
+                    prenom=prenom_eleve, niveau=niveau_eleve
+                ) + _consigne_sys
+
+                prompt = ChatPromptTemplate.from_messages([
+                    ("system", system_prompt),
+                    MessagesPlaceholder(variable_name="chat_history"),
+                    ("human", "{input}")
+                ])
+
+                response = (prompt | llm).invoke({
                     "input": message_final,
                     "chat_history": chat_history[-10:]
                 })
@@ -2830,22 +3554,106 @@ if user_input:
                     assistant_reply, user_input, chat_history, langue_choisie
                 )
 
-                # Score basé sur verifier_reponse() — avant GPT
+                # ── Verdict Python ──────────────────────────────
                 _verdict = verifier_reponse(user_input, chat_history)
                 if _verdict is not None:
                     st.session_state[score_key]["total"] += 1
                     if _verdict == "correct":
                         st.session_state[score_key]["bonnes"] += 1
 
-                # ── 4. Machine à états : Mise à jour de l'étape ──────
-                nouvelle_etape = detecter_etape(assistant_reply, user_input, _verdict, etape_actuelle)
-                st.session_state[etape_key] = nouvelle_etape
+                # ── Fix 2 : Progression par compteur Python ─────
+                etape_av = st.session_state[etape_key]
 
-                # ── 5. Affichage : Image PUIS texte ──────
-                _img_path_to_store = _img_path  # mémoriser pour stocker après appends
+                if _verdict == "correct":
+                    st.session_state["bonnes_consec"] += 1
+                elif _verdict == "incorrect":
+                    st.session_state["bonnes_consec"] = 0
+
+                # exercice1 → 1 bonne → exercice2
+                if etape_av == "exercice1" and _verdict == "correct":
+                    st.session_state[etape_key] = "exercice2"
+                    st.session_state["bonnes_consec"] = 0
+
+                # correction1 → 1 bonne → exercice2
+                elif etape_av == "correction1" and _verdict == "correct":
+                    st.session_state[etape_key] = "exercice2"
+                    st.session_state["bonnes_consec"] = 0
+
+                # exercice2 → 1 bonne → quiz
+                elif etape_av == "exercice2" and _verdict == "correct":
+                    st.session_state[etape_key] = "quiz"
+                    st.session_state["bonnes_consec"] = 0
+
+                # correction2 → 1 bonne → quiz
+                elif etape_av == "correction2" and _verdict == "correct":
+                    st.session_state[etape_key] = "quiz"
+                    st.session_state["bonnes_consec"] = 0
+
+                # quiz → 1 bonne → félicitations
+                elif etape_av in ("quiz", "correction_quiz") and _verdict == "correct":
+                    st.session_state[etape_key] = "felicitations"
+                    st.session_state["bonnes_consec"] = 0
+
+                # CORRECTIONS : incorrect → rester en correction (PAS avancer même si ✏️ dans reply)
+                elif etape_av == "exercice1" and _verdict == "incorrect":
+                    st.session_state[etape_key] = "correction1"
+                elif etape_av == "exercice2" and _verdict == "incorrect":
+                    st.session_state[etape_key] = "correction2"
+                elif etape_av in ("quiz", "correction_quiz") and _verdict == "incorrect":
+                    st.session_state[etape_key] = "correction_quiz"
+
+                # États de correction : rester jusqu'à une bonne réponse
+                elif etape_av in ("correction1", "correction2", "correction_quiz"):
+                    # Ne PAS avancer même si GPT a posé un ✏️ dans sa réponse
+                    # L'élève doit retenter — on attend son verdict
+                    pass
+
+                # explication → exercice1 (quand GPT a posé ✏️)
+                elif etape_av == "explication" and "✏️" in assistant_reply:
+                    st.session_state[etape_key] = "exercice1"
+                    st.session_state["bonnes_consec"] = 0
+
+                else:
+                    # Fallback machine à états texte pour les autres cas
+                    nouvelle_etape = detecter_etape(
+                        assistant_reply, user_input, _verdict, etape_av
+                    )
+                    st.session_state[etape_key] = nouvelle_etape
+
+                # ── Félicitations : gérer choix 1 (encore) et 2 (autre sujet) ──
+                if etape_av == "felicitations":
+                    msg_strip = user_input.strip()
+                    ul = user_input.lower()
+                    # Changer de sujet → reset complet + message amorce direct
+                    if msg_strip in ["2", "٢", "2️⃣"] or "autre" in ul or "آخر" in ul or "changer" in ul:
+                        st.session_state[etape_key]      = "amorce"
+                        st.session_state["bonnes_consec"] = 0
+                        st.session_state["choix_image"]   = None
+                        st.session_state["choix_consigne"] = None
+                        if langue_choisie == "العربية":
+                            msg_amorce = f"رائع ! 😊 ماذا تريد أن تتعلم الآن {prenom_eleve} ؟\nالجمع ➕ الطرح ➖ الضرب ✖️ القسمة ➗"
+                        else:
+                            msg_amorce = f"Super ! 😊 Qu'est-ce que tu veux apprendre maintenant {prenom_eleve} ?\nAddition ➕ Soustraction ➖ Multiplication ✖️ Division ➗"
+                        st.session_state[session_key].append(HumanMessage(content=user_input))
+                        st.session_state[session_key].append(AIMessage(content=msg_amorce))
+                        with st.chat_message("assistant"):
+                            st.markdown(f'<div dir="{direction}">{msg_amorce}</div>', unsafe_allow_html=True)
+                        db_ajouter_message(st.session_state[eleve_key].get("session_db_id"), "eleve", user_input)
+                        db_ajouter_message(st.session_state[eleve_key].get("session_db_id"), "tuteur", msg_amorce)
+                        st.rerun()
+                    # Encore des exercices → reset état mais garde le sujet
+                    elif msg_strip in ["1", "١", "1️⃣"] or "encore" in ul or "oui" in ul or "نعم" in ul:
+                        st.session_state[etape_key]      = "amorce"
+                        st.session_state["bonnes_consec"] = 0
+
+                # ── Stocker l'image dans l'historique persistant ──────
+                if _img_path:
+                    next_idx = len(chat_history) + 1
+                    st.session_state["images_history"][next_idx] = _img_path
+
+                # ── Affichage stable : image en haut, texte dessous ──────
                 if _img_path:
                     st.image(_img_path, use_container_width=True)
-
                 st.markdown(f'<div dir="{direction}">{assistant_reply}</div>', unsafe_allow_html=True)
 
             except Exception as e:
@@ -2854,10 +3662,6 @@ if user_input:
 
     st.session_state[session_key].append(HumanMessage(content=user_input))
     st.session_state[session_key].append(AIMessage(content=assistant_reply))
-    # ── Stocker l'image avec index exact (APRÈS les appends) ──
-    if _img_path_to_store and os.path.exists(_img_path_to_store):
-        _idx_img = len(st.session_state[session_key]) - 1
-        st.session_state["images_history"][_idx_img] = _img_path_to_store
     # Sauvegarder les messages dans Supabase
     sid_db = st.session_state[eleve_key].get("session_db_id")
     db_ajouter_message(sid_db, "eleve",  user_input)
