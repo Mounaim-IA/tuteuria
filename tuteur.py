@@ -2991,7 +2991,7 @@ for i, msg in enumerate(chat_history):
             contenu = msg.content
             # Reconstituer l'affichage intro → image → suite si image stockée
             if _img_stored and os.path.exists(_img_stored):
-                st.image(_img_stored, width=450)
+                st.image(_img_stored, width=350)
             st.markdown(f'<div dir="{direction}">{contenu}</div>', unsafe_allow_html=True)
         else:
             st.markdown(f'<div dir="{direction}">{msg.content}</div>', unsafe_allow_html=True)
@@ -3755,7 +3755,7 @@ if user_input:
 
                     # ── Affichage stable : image en haut, texte dessous ──────
                     if _img_path:
-                        st.image(_img_path, width=450)  # Utilise la même taille qu'au-dessus
+                        st.image(_img_path, width=350)  # Utilise la même taille qu'au-dessus
                     st.markdown(f'<div dir="{direction}">{assistant_reply}</div>', unsafe_allow_html=True)
 
                 except Exception as e:
