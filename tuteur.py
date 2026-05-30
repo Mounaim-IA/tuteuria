@@ -3162,7 +3162,38 @@ if user_input:
         st.session_state["choix_image"]    = None
         st.session_state["choix_consigne"] = None
         etape_actuelle = "amorce"
-    
+        # ── Pas de chiffres → clarification directe sans GPT ──
+        if _new_operation and not any(c.isdigit() for c in user_input):
+            st.session_state["hors_niveau_operation"] = _new_operation
+            st.session_state[etape_key] = "clarification"
+            if langue_choisie == "العربية":
+                _questions_ch = {
+                    "addition"      : "تريد الجمع البسيط أم الجمع مع الاحتفاظ ؟ 😊",
+                    "soustraction"  : "تريد الطرح البسيط أم الطرح مع الاستلاف ؟ 😊",
+                    "multiplication": "تريد جداول الضرب أم الضرب المطول ؟ 😊",
+                    "division"      : "تريد القسمة البسيطة أم القسمة المطولة ؟ 😊",
+                }
+            else:
+                _questions_ch = {
+                    "addition"      : "Tu veux l'addition simple ou l'addition avec retenue ? 😊",
+                    "soustraction"  : "Tu veux la soustraction simple ou la soustraction avec emprunt ? 😊",
+                    "multiplication": "Tu veux les tables de multiplication ou la multiplication posée ? 😊",
+                    "division"      : "Tu veux la division simple ou la division posée ? 😊",
+                }
+            _clarif_ch = _questions_ch.get(_new_operation, "Quel type tu veux apprendre ? 😊")
+            direction = "rtl" if langue_choisie == "العربية" else "ltr"
+            with st.chat_message("assistant"):
+                st.markdown(f'<div dir="{direction}">{_clarif_ch}</div>', unsafe_allow_html=True)
+            st.session_state[session_key].append(HumanMessage(content=user_input))
+            st.session_state[session_key].append(AIMessage(content=_clarif_ch))
+            try:
+                sid_db = st.session_state[eleve_key].get("session_db_id")
+                db_ajouter_message(sid_db, "eleve", user_input)
+                db_ajouter_message(sid_db, "tuteur", _clarif_ch)
+            except Exception:
+                pass
+            st.rerun()
+
     _skip_gpt = False
     if etape_actuelle == "amorce":
         operation = detecter_operation_demandee(user_input)
@@ -3227,32 +3258,64 @@ if user_input:
                     pass
                 _skip_gpt = True
 
-            # ── CAS 3 : Question spécifique → image précise via calcul extrait ──
+            # ── CAS 3 : Problème énoncé avec chiffres → image précise via calcul extrait ──
             else:
-                # Extraire le calcul réel via llm_classifier pour choisir la bonne image
-                # Ex: "9 pommes sur quatre enfants" → "9 ÷ 4" → 9%4≠0 → division_avec_reste
-                calcul_extrait = extraire_calcul_depuis_probleme(user_input, operation)
-                img_path, consigne = None, None
+                # Si pas de problème énoncé détecté → clarification directe
+                if not detecter_probleme_enonce(user_input):
+                    st.session_state["hors_niveau_operation"] = operation
+                    st.session_state[etape_key] = "clarification"
+                    if langue_choisie == "العربية":
+                        _questions_c3 = {
+                            "addition"      : "تريد الجمع البسيط أم الجمع مع الاحتفاظ ؟ 😊",
+                            "soustraction"  : "تريد الطرح البسيط أم الطرح مع الاستلاف ؟ 😊",
+                            "multiplication": "تريد جداول الضرب أم الضرب المطول ؟ 😊",
+                            "division"      : "تريد القسمة البسيطة أم القسمة المطولة ؟ 😊",
+                        }
+                    else:
+                        _questions_c3 = {
+                            "addition"      : "Tu veux l'addition simple ou l'addition avec retenue ? 😊",
+                            "soustraction"  : "Tu veux la soustraction simple ou la soustraction avec emprunt ? 😊",
+                            "multiplication": "Tu veux les tables de multiplication ou la multiplication posée ? 😊",
+                            "division"      : "Tu veux la division simple ou la division posée ? 😊",
+                        }
+                    _clarif_c3 = _questions_c3.get(operation, "Quel type tu veux apprendre ? 😊")
+                    direction = "rtl" if langue_choisie == "العربية" else "ltr"
+                    with st.chat_message("assistant"):
+                        st.markdown(f'<div dir="{direction}">{_clarif_c3}</div>', unsafe_allow_html=True)
+                    st.session_state[session_key].append(HumanMessage(content=user_input))
+                    st.session_state[session_key].append(AIMessage(content=_clarif_c3))
+                    try:
+                        sid_db = st.session_state[eleve_key].get("session_db_id")
+                        db_ajouter_message(sid_db, "eleve", user_input)
+                        db_ajouter_message(sid_db, "tuteur", _clarif_c3)
+                    except Exception:
+                        pass
+                    st.rerun()
+                else:
+                    # Extraire le calcul réel via llm_classifier pour choisir la bonne image
+                    # Ex: "9 pommes sur quatre enfants" → "9 ÷ 4" → 9%4≠0 → division_avec_reste
+                    calcul_extrait = extraire_calcul_depuis_probleme(user_input, operation)
+                    img_path, consigne = None, None
 
-                if calcul_extrait:
-                    # Parser l'expression extraite pour get_image_for_calcul
-                    import re as _re
-                    _m = _re.search(
-                        r'(\d+(?:[,\.]\d+)?)\s*([+\-−×÷*/])\s*(\d+(?:[,\.]\d+)?)',
-                        calcul_extrait
-                    )
-                    if _m:
-                        _a  = float(_m.group(1).replace(',', '.'))
-                        _op = ('÷' if _m.group(2) in ['/', '÷'] else
-                               '×' if _m.group(2) in ['*', '×'] else
-                               '-' if _m.group(2) == '−' else _m.group(2))
-                        _b  = float(_m.group(3).replace(',', '.'))
-                        
-                        # Appel avec les bonnes variables définies AU-DESSUS + langue_choisie
-                        img_path, consigne = get_image_for_calcul(_a, _op, _b, niveau_eleve, langue_choisie)
-                        st.session_state["calcul_direct"] = calcul_extrait
+                    if calcul_extrait:
+                        # Parser l'expression extraite pour get_image_for_calcul
+                        import re as _re
+                        _m = _re.search(
+                            r'(\d+(?:[,\.]\d+)?)\s*([+\-−×÷*/])\s*(\d+(?:[,\.]\d+)?)',
+                            calcul_extrait
+                        )
+                        if _m:
+                            _a  = float(_m.group(1).replace(',', '.'))
+                            _op = ('÷' if _m.group(2) in ['/', '÷'] else
+                                   '×' if _m.group(2) in ['*', '×'] else
+                                   '-' if _m.group(2) == '−' else _m.group(2))
+                            _b  = float(_m.group(3).replace(',', '.'))
+                            
+                            # Appel avec les bonnes variables définies AU-DESSUS + langue_choisie
+                            img_path, consigne = get_image_for_calcul(_a, _op, _b, niveau_eleve, langue_choisie)
+                            st.session_state["calcul_direct"] = calcul_extrait
 
-                # Fallback : get_image_for_question si extraction échoue
+                    # Fallback : get_image_for_question si extraction échoue
                 if not img_path:
                     msg_avec_op = f"{operation} {user_input}"
                     img_path, consigne = get_image_for_question(msg_avec_op, niveau_eleve)
