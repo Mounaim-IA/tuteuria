@@ -2100,7 +2100,7 @@ def choisir_soustype_auto(operation, niveau, user_input=""):
         "multiplication": {
             1: ("multiplication_visuelle",    "multiplication visuelle simple, nombres entre 2 et 5, résultat ≤ 25, exemple : 3 × 2 = 6"),
             2: ("tables_1_2_3_4_5",           "tables de multiplication 1, 2, 3, 4 et 5 uniquement, produit entre 1×1 et 5×10"),
-            3: ("tables_multiplication",      "tables de multiplication de 1 à 9"),
+            3: ("multiplication_simple",      "multiplication 2 chiffres × 1 chiffre avec retenue, exemple : 34 × 6 = 204"),
             4: ("multiplication_simple",      "multiplication 2 chiffres × 1 chiffre avec retenue"),
             5: ("multiplication_2_chiffres",  "multiplication 2 chiffres × 2 chiffres, deux lignes + addition"),
             6: ("multiplication_3ch_1ch",     "multiplication 3 chiffres × 1 chiffre avec retenues, exemple : 245 × 7 = 1715"),
@@ -3325,7 +3325,7 @@ for i, msg in enumerate(chat_history):
             _img_stored = _img_hist.get(i)
             if _img_stored:
                 if os.path.exists(_img_stored):
-                    st.image(_img_stored, width=300) # Taille augmentée pour la soutenance
+                    st.image(_img_stored, use_container_width=True)  # Largeur adaptative pour lisibilité tables
                 else:
                     st.warning(f"Image introuvable : {_img_stored}")
             # --- FIN DE LA MODIFICATION ---
@@ -4307,7 +4307,7 @@ if chat_actif:
 
                         # ── Affichage stable : image en haut, texte dessous ──────
                         if _img_path:
-                            st.image(_img_path, width=250)  # Utilise la même taille qu'au-dessus
+                            st.image(_img_path, use_container_width=True)  # Largeur adaptative
                         st.markdown(f'<div dir="{direction}">{assistant_reply}</div>', unsafe_allow_html=True)
 
                     except Exception as e:
