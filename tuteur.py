@@ -984,30 +984,79 @@ def injecter_verdict(user_message, historique, langue):
         if langue == "العربية":
             _is_div = '÷' in etapes_str or 'reste' in resultat or 'الباقي' in resultat
             _div_warning = "\n⚠️ القسمة دائماً بالحاصل + الباقي. ممنوع الأعداد العشرية!" if _is_div else ""
+            _modele = generer_modelage(extraire_exercice(historique))
+            _modele_line = (f"في الخطوة 2 (النمذجة)، حُلَّ هذا الحساب بالذات أمام التلميذ : {_modele} "
+                            f"(لا تعطِ نتيجة تمرين التلميذ).\n") if _modele else ""
             return (
                 f"{user_message}\n[VERDICT PYTHON: INCORRECT ❌\n"
                 f"الجواب الصحيح = {resultat}\n"
                 f"الخطوات الصحيحة بالترتيب : {etapes_str}\n"
                 f"1. شجع الطالب بلطف 😊\n"
                 f"2. قل 'تذكر الصورة التي رأيناها ! 😊' واشرح الخطوات بالأرقام الحقيقية للتمرين\n"
+                f"{_modele_line}"
                 f"3. لا تعطِ الجواب مباشرة. اسأل سؤالاً للتوجيه : 'حاول مرة أخرى 🤔'\n"
                 f"4. انتظر جواب الطالب{_div_warning}]"
             )
         else:
             _is_div = '÷' in etapes_str or 'reste' in resultat
             _div_warning = "\n⚠️ DIVISION : résultat en quotient + reste, JAMAIS de décimaux !" if _is_div else ""
+            _modele = generer_modelage(extraire_exercice(historique))
+            _modele_line = (f"Pour le TEMPS 2 (modelage), résous CE calcul précis devant l'élève : {_modele} "
+                            f"(NE donne PAS le résultat de l'exercice de l'élève).\n") if _modele else ""
             return (
                 f"{user_message}\n[VERDICT PYTHON: INCORRECT ❌\n"
                 f"Résultat correct = {resultat}\n"
                 f"Étapes exactes dans l'ordre : {etapes_str}\n"
                 f"1. Encourage l'élève avec douceur 😊\n"
                 f"2. Dis 'Rappelle-toi l'image ! 😊' et explique avec les VRAIS chiffres de l'exercice\n"
+                f"{_modele_line}"
                 f"3. Ne donne PAS la réponse directement. Pose une question pour guider : 'Essaie encore 🤔'\n"
                 f"4. Attends la réponse de l'élève{_div_warning}]"
             )
 
-def nettoyer_reponse(reply):
-    """Supprime LaTeX, noms d'étapes et TOUT le markdown interdit (D9)."""
+def generer_modelage(exercice):
+    """
+    Génère un calcul de MODELAGE garanti DIFFÉRENT de l'exercice de l'élève
+    (opération + difficulté proches, mais résultat différent → anti-recopie).
+    Retourne une chaîne 'a op b' ou None si non calculable.
+    """
+    import re as _re, random as _rd
+    if not exercice:
+        return None
+    expr = str(exercice[0]).replace('−', '-').replace('×', '*').replace('÷', '/').replace('x', '*')
+    m = _re.match(r'\s*(\d+)\s*([+\-*/])\s*(\d+)\s*', expr)
+    if not m:
+        return None
+    a, op, b = int(m.group(1)), m.group(2), int(m.group(3))
+    sym = {'+': '+', '-': '-', '*': '×', '/': '÷'}[op]
+    try:
+        res_eleve = {'+': a + b, '-': a - b, '*': a * b, '/': (a // b if b else None)}[op]
+    except Exception:
+        res_eleve = None
+    for _ in range(40):
+        da, db = _rd.randint(-9, 9), _rd.randint(-9, 9)
+        na, nb = a + da, b + db
+        if na <= 0 or nb <= 0:
+            continue
+        if op == '-' and na <= nb:
+            continue
+        if op == '/' and (nb == 0 or na % nb != 0):
+            continue
+        if op == '-' and (na - nb) == res_eleve:   # cœur de l'anti-recopie
+            continue
+        if op == '+' and (na + nb) == res_eleve:
+            continue
+        if op == '*' and (na * nb) == res_eleve:
+            continue
+        if op == '/' and (na // nb) == res_eleve:
+            continue
+        if (na, nb) == (a, b):
+            continue
+        return f"{na}{sym}{nb}"
+    return None
+
+
+
     # ── Étiquettes pédagogiques internes ──
     etiquettes = [
         r'📖\s*EXPLICATION\s*[:\-–—]*\s*',
